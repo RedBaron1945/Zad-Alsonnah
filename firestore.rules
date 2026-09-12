@@ -1,0 +1,79 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Only this exact UID has administrator privileges
+    function isAdmin() {
+      return isAuthenticated() && request.auth.uid == 'WZcxWpG1PLgQYbnegHndxlrxHVx2';
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Default deny all access unless explicitly allowed
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // User profile collection
+    match /users/{userId} {
+      // Users can only read their own profile; Admin can read all profiles
+      allow read: if isOwner(userId) || isAdmin();
+
+      // Users can create their own profile as a student; Admin can create any profile
+      allow create: if (isOwner(userId) &&
+        (!('role' in request.resource.data) || request.resource.data.role == 'student' || isAdmin())
+      ) || isAdmin();
+
+      // Users can update their own profile (name, settings, etc.) but cannot change their UID or escalate role to admin
+      allow update: if (isOwner(userId) &&
+        (!('role' in request.resource.data) || request.resource.data.role == resource.data.role) &&
+        (!('uid' in request.resource.data) || request.resource.data.uid == userId)
+      ) || isAdmin();
+
+      // Only the admin can delete user profiles
+      allow delete: if isAdmin();
+    }
+
+    // Daily Hadiths collection
+    match /dailyHadiths/{hadithId} {
+      // Authenticated students and admin can read hadiths
+      allow read: if isAuthenticated();
+
+      // Only the administrator can add, edit, or delete hadiths
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Sunnah & Adhkar practices collection
+    match /practices/{practiceId} {
+      // Authenticated students and admin can read practices
+      allow read: if isAuthenticated();
+
+      // Only the administrator can add, edit, or delete practices
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Daily student completion and progress records
+    match /dailyProgress/{progressId} {
+      // Students can only read their own progress; Admin can read all student progress
+      allow read: if (isAuthenticated() && resource.data.userId == request.auth.uid) || isAdmin();
+
+      // Students can only record progress for their own UID; Admin can record for anyone
+      allow create: if (isAuthenticated() && request.resource.data.userId == request.auth.uid) || isAdmin();
+
+      // Students can only update their own progress and cannot alter userId
+      allow update: if (isAuthenticated() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == request.auth.uid) || isAdmin();
+
+      // Students can only delete/unmark their own progress; Admin can delete any progress
+      allow delete: if (isAuthenticated() && resource.data.userId == request.auth.uid) || isAdmin();
+    }
+  }
+}
+

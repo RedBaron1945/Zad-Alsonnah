@@ -1,0 +1,147 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "بيانات ملف المستخدم (طالب أو مدير البرنامج)",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID"
+        },
+        "name": {
+          "type": "string",
+          "description": "اسم الطالب أو المشرف الكامل"
+        },
+        "email": {
+          "type": "string",
+          "description": "البريد الإلكتروني"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["student", "admin"],
+          "description": "رتبة المستخدم"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "تاريخ إنشاء الحساب"
+        }
+      },
+      "required": ["uid", "name", "email", "role"]
+    },
+    "DailyHadith": {
+      "title": "DailyHadith",
+      "description": "الحديث أو التطبيق النبوي لليوم المحدد",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "معرف الحديث الفريد"
+        },
+        "date": {
+          "type": "string",
+          "description": "تاريخ اليوم YYYY-MM-DD"
+        },
+        "dayName": {
+          "type": "string",
+          "description": "اسم اليوم بالعربية"
+        },
+        "title": {
+          "type": "string",
+          "description": "عنوان الحديث النبوي"
+        },
+        "content": {
+          "type": "string",
+          "description": "متن الحديث أو الذكر النبوي"
+        },
+        "source": {
+          "type": "string",
+          "description": "تخريج الحديث"
+        },
+        "category": {
+          "type": "string",
+          "description": "تصنيف الحديث"
+        },
+        "order": {
+          "type": "number",
+          "description": "ترتيب الحديث في اليوم"
+        }
+      },
+      "required": ["id", "date", "title", "content"]
+    },
+    "Practice": {
+      "title": "Practice",
+      "description": "التطبيق أو السنة النبوية الثابتة في البرنامج",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "معرف التطبيق"
+        },
+        "title": {
+          "type": "string",
+          "description": "عنوان التطبيق"
+        },
+        "text": {
+          "type": "string",
+          "description": "نص السنة أو الذكر"
+        },
+        "active": {
+          "type": "boolean",
+          "description": "هل التطبيق مفعل حالياً"
+        }
+      },
+      "required": ["id", "title", "text"]
+    },
+    "DailyProgress": {
+      "title": "DailyProgress",
+      "description": "سجل إنجاز الطالب لتطبيق أو حديث يومي",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "معرف السجل الفريد"
+        },
+        "userId": {
+          "type": "string",
+          "description": "UID الخاص بالطالب صاحب الإنجاز"
+        },
+        "practiceId": {
+          "type": "string",
+          "description": "معرف الحديث أو التطبيق المنجز"
+        },
+        "date": {
+          "type": "string",
+          "description": "تاريخ اليوم بصيغة YYYY-MM-DD"
+        },
+        "completed": {
+          "type": "boolean",
+          "description": "حالة الإنجاز (تم التطبيق)"
+        },
+        "completedAt": {
+          "type": "string",
+          "description": "تاريخ ووقت توثيق الإنجاز"
+        }
+      },
+      "required": ["userId", "practiceId", "date", "completed"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "سجلات حسابات المستخدمين (طلاب وإدارة)"
+    },
+    "/dailyHadiths/{hadithId}": {
+      "schema": "DailyHadith",
+      "description": "أحاديث وتطبيقات البرنامج الموزعة على الأيام"
+    },
+    "/practices/{practiceId}": {
+      "schema": "Practice",
+      "description": "بنك السنن والتطبيقات النبوية"
+    },
+    "/dailyProgress/{progressId}": {
+      "schema": "DailyProgress",
+      "description": "سجلات إنجاز الطلاب اليومية معزولة تماماً لكل طالب"
+    }
+  }
+}

@@ -1,0 +1,22 @@
+<svg viewBox="0 0 200 220" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Book Outer Golden Trim -->
+  <path d="M10 32C10 32 48 45 100 62C152 45 190 32 190 32V142C190 142 150 156 100 172C50 156 10 142 10 142V32Z" fill="#FBBF24"/>
+  <path d="M15 45V140C15 140 50 152 100 168C150 152 185 140 185 140V45C185 45 155 58 100 75C45 58 15 45 15 45Z" fill="#F59E0B" opacity="0.9"/>
+  <!-- Pages -->
+  <path d="M25 24V132C25 132 55 144 95 155V44C55 35 25 24 25 24Z" fill="#1D4ED8"/>
+  <path d="M32 18V126C32 126 60 138 95 148V36C60 27 32 18 32 18Z" fill="#3B82F6"/>
+  <path d="M38 12V120C38 120 65 131 95 140V28C65 20 38 12 38 12Z" fill="#60A5FA"/>
+  <path d="M175 24V132C175 132 145 144 105 155V44C145 35 175 24 175 24Z" fill="#1D4ED8"/>
+  <path d="M168 18V126C168 126 140 138 105 148V36C140 27 168 18 168 18Z" fill="#3B82F6"/>
+  <path d="M162 12V120C162 120 135 131 105 140V28C135 20 162 12 162 12Z" fill="#60A5FA"/>
+  <path d="M98 25L100 165L102 25Z" fill="#FFFFFF" opacity="0.6"/>
+  <!-- Golden Feather Quill -->
+  <g transform="translate(12, 145) scale(0.48)">
+    <path d="M25 95C25 95 15 70 30 40C40 20 65 5 80 0C78 18 68 35 55 48C45 58 35 75 35 90C35 95 30 102 25 95Z" fill="#B45309"/>
+    <path d="M32 90C32 90 22 68 35 42C43 25 64 12 76 8C72 24 62 38 52 50C44 60 38 78 38 88C38 92 34 96 32 90Z" fill="#D97706"/>
+    <path d="M36 85C36 85 30 65 40 45C46 32 60 22 70 18C66 30 58 42 50 52C44 60 40 75 40 82C40 86 38 89 36 85Z" fill="#F59E0B"/>
+    <path d="M22 102C26 88 38 60 75 10" stroke="#92400E" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  <text x="115" y="182" text-anchor="middle" fill="#0052CC" font-weight="900" font-size="30" font-family="'Tajawal', 'Cairo', 'Arial', sans-serif">تَكْـوِين</text>
+  <text x="122" y="212" text-anchor="middle" fill="#D97706" font-weight="900" font-size="26" font-family="'Tajawal', 'Cairo', 'Arial', sans-serif">النَّسِـيم</text>
+</svg>
