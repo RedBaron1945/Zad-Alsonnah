@@ -1,12 +1,17 @@
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper functions
+
+    // =====================================================
+    // 1. ADMIN HELPER (صلاحيات الإدارة)
+    // =====================================================
     function isAuthenticated() {
       return request.auth != null;
     }
 
-    // Only this exact UID has administrator privileges
+    // Admin = the fixed program-admin UID only. No email matching of any
+    // kind — an email must never grant admin rights.
     function isAdmin() {
       return isAuthenticated() && request.auth.uid == 'WZcxWpG1PLgQYbnegHndxlrxHVx2';
     }
@@ -15,65 +20,98 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    // Default deny all access unless explicitly allowed
-    match /{document=**} {
-      allow read, write: if false;
+    // =====================================================
+    // 2. DAILY HADITHS (الأحاديث النبوية المعتمدة)
+    // =====================================================
+    match /dailyHadiths/{hadithId} {
+      // القراءة للمستخدمين المسجّلين فقط (طلاب وإدارة)
+      allow read: if isAuthenticated();
+
+      // الإضافة والتعديل والحذف من الإدارة فقط
+      allow create, update, delete: if isAdmin();
     }
 
-    // User profile collection
+    // =====================================================
+    // 3. PRACTICES (السنن والآداب النبوية)
+    // =====================================================
+    match /practices/{practiceId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // =====================================================
+    // 4. DAILY PROGRESS (سجلات إنجاز الطلاب اليومية)
+    // =====================================================
+    match /dailyProgress/{progressId} {
+      // الطالب يقرأ سجله فقط، والإدارة تقرأ سجلات الجميع (للوحة الإدارة)
+      allow read: if (isAuthenticated() && resource.data.userId == request.auth.uid) || isAdmin();
+
+      // الطالب يسجل/يعدّل/يحذف إنجازه الخاص فقط، والإدارة لها الصلاحية الكاملة
+      allow create: if (isAuthenticated() && request.resource.data.userId == request.auth.uid) || isAdmin();
+      allow update: if (isAuthenticated() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == request.auth.uid) || isAdmin();
+      allow delete: if (isAuthenticated() && resource.data.userId == request.auth.uid) || isAdmin();
+    }
+
+    // توافقية إضافية مع مجموعة progress القديمة (نفس القواعد)
+    match /progress/{progressId} {
+      allow read: if (isAuthenticated() && resource.data.userId == request.auth.uid) || isAdmin();
+      allow create: if (isAuthenticated() && request.resource.data.userId == request.auth.uid) || isAdmin();
+      allow update: if (isAuthenticated() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == request.auth.uid) || isAdmin();
+      allow delete: if (isAuthenticated() && resource.data.userId == request.auth.uid) || isAdmin();
+    }
+
+    // =====================================================
+    // 5. USERS (ملفات وحسابات المستخدمين والطلاب)
+    // =====================================================
     match /users/{userId} {
-      // Users can only read their own profile; Admin can read all profiles
+      // كل مستخدم يقرأ ملفه فقط، والإدارة تقرأ ملفات الجميع (للوحة الإدارة)
       allow read: if isOwner(userId) || isAdmin();
 
-      // Users can create their own profile as a student; Admin can create any profile
       allow create: if (isOwner(userId) &&
         (!('role' in request.resource.data) || request.resource.data.role == 'student' || isAdmin())
       ) || isAdmin();
 
-      // Users can update their own profile (name, settings, etc.) but cannot change their UID or escalate role to admin
       allow update: if (isOwner(userId) &&
         (!('role' in request.resource.data) || request.resource.data.role == resource.data.role) &&
         (!('uid' in request.resource.data) || request.resource.data.uid == userId)
       ) || isAdmin();
 
-      // Only the admin can delete user profiles
       allow delete: if isAdmin();
     }
 
-    // Daily Hadiths collection
-    match /dailyHadiths/{hadithId} {
-      // Authenticated students and admin can read hadiths
-      allow read: if isAuthenticated();
+    // =====================================================
+    // 6. STUDENTS (هيكل توافقي مع الطلاب و subcollections)
+    // =====================================================
+    match /students/{uid} {
+      allow read: if isOwner(uid) || isAdmin();
+      allow write: if isAdmin() || isOwner(uid);
 
-      // Only the administrator can add, edit, or delete hadiths
-      allow create, update, delete: if isAdmin();
+      match /{subcollection}/{documentId} {
+        allow read: if isOwner(uid) || isAdmin();
+        allow write: if isAdmin() || isOwner(uid);
+      }
     }
 
-    // Sunnah & Adhkar practices collection
-    match /practices/{practiceId} {
-      // Authenticated students and admin can read practices
-      allow read: if isAuthenticated();
-
-      // Only the administrator can add, edit, or delete practices
-      allow create, update, delete: if isAdmin();
+    // =====================================================
+    // 7. ADMIN DATA & SETTINGS
+    // =====================================================
+    match /admin/{documentId} {
+      allow read, write: if isAdmin();
     }
 
-    // Daily student completion and progress records
-    match /dailyProgress/{progressId} {
-      // Students can only read their own progress; Admin can read all student progress
-      allow read: if (isAuthenticated() && resource.data.userId == request.auth.uid) || isAdmin();
+    match /adminSettings/{documentId} {
+      allow read, write: if isAdmin();
+    }
 
-      // Students can only record progress for their own UID; Admin can record for anyone
-      allow create: if (isAuthenticated() && request.resource.data.userId == request.auth.uid) || isAdmin();
-
-      // Students can only update their own progress and cannot alter userId
-      allow update: if (isAuthenticated() &&
-        resource.data.userId == request.auth.uid &&
-        request.resource.data.userId == request.auth.uid) || isAdmin();
-
-      // Students can only delete/unmark their own progress; Admin can delete any progress
-      allow delete: if (isAuthenticated() && resource.data.userId == request.auth.uid) || isAdmin();
+    // =====================================================
+    // 8. DEFAULT DENY
+    // =====================================================
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }
-
