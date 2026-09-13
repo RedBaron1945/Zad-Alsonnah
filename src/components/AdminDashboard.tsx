@@ -4,6 +4,7 @@ import {
   ensurePracticesSeeded,
   addNewPractice,
   updateStudentName,
+  deleteStudentPermanently,
   deletePractice,
   clearAllProgramData,
   getTodayDateString,
@@ -74,6 +75,11 @@ export const AdminDashboard: React.FC = () => {
   const [newStudentName, setNewStudentName] = useState('');
   const [isSavingName, setIsSavingName] = useState(false);
   const [editNameError, setEditNameError] = useState('');
+
+  // Student Delete State (Admin permanently deleting a student)
+  const [deletingStudent, setDeletingStudent] = useState<StudentStats | null>(null);
+  const [isDeletingStudent, setIsDeletingStudent] = useState(false);
+  const [deleteStudentError, setDeleteStudentError] = useState('');
 
   // Add Hadith Modal State
   const [isAddingHadith, setIsAddingHadith] = useState(false);
@@ -189,6 +195,43 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
+  // Handle permanently deleting a student
+  const handleConfirmDeleteStudent = async () => {
+    if (!deletingStudent) return;
+    try {
+      setIsDeletingStudent(true);
+      setDeleteStudentError('');
+      await deleteStudentPermanently(deletingStudent.user.uid);
+
+      // Remove from local stats state
+      setStats((prev) => {
+        const updatedList = prev.studentsList.filter(
+          (item) => item.user.uid !== deletingStudent.user.uid
+        );
+        const total = updatedList.length;
+        const activeToday = updatedList.filter((s) => s.todayCompletedAll).length;
+        return {
+          ...prev,
+          totalStudents: total,
+          activeStudentsToday: activeToday,
+          completionRateToday: total > 0 ? Math.round((activeToday / total) * 100) : 0,
+          studentsList: updatedList,
+        };
+      });
+
+      if (selectedStudent?.user.uid === deletingStudent.user.uid) {
+        setSelectedStudent(null);
+      }
+
+      setDeletingStudent(null);
+    } catch (err) {
+      console.error('Failed to permanently delete student:', err);
+      setDeleteStudentError('فشل حذف الطالب من قاعدة البيانات. يرجى المحاولة مرة أخرى.');
+    } finally {
+      setIsDeletingStudent(false);
+    }
+  };
+
   // Handle adding new hadith/practice
   const handleCreateHadith = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -284,6 +327,10 @@ export const AdminDashboard: React.FC = () => {
           setEditingStudent(selectedStudent);
           setNewStudentName(selectedStudent.user.name);
           setEditNameError('');
+        }}
+        onDeleteStudent={() => {
+          setDeletingStudent(selectedStudent);
+          setDeleteStudentError('');
         }}
       />
     );
@@ -646,6 +693,18 @@ export const AdminDashboard: React.FC = () => {
                               <span>التفاصيل</span>
                               <ChevronLeft className="w-3 h-3" />
                             </button>
+
+                            {/* Delete Student Permanently Button */}
+                            <button
+                              onClick={() => {
+                                setDeletingStudent(student);
+                                setDeleteStudentError('');
+                              }}
+                              className="p-1.5 rounded-lg text-rose-600 hover:text-rose-800 hover:bg-rose-50 border border-rose-200 transition-colors cursor-pointer"
+                              title="حذف الطالب نهائياً من البرنامج"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -947,6 +1006,81 @@ export const AdminDashboard: React.FC = () => {
                 className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl transition-colors cursor-pointer shadow-xs disabled:opacity-50"
               >
                 {isClearingData ? 'جارٍ الحذف...' : 'نعم، احذف جميع البيانات'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 4: Delete Single Student Permanently Confirmation */}
+      {deletingStudent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-3xl shadow-xl border border-rose-100 max-w-md w-full p-6 text-right animate-in fade-in zoom-in-95 duration-150">
+            <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mb-4 mx-auto">
+              <Trash2 className="w-6 h-6" />
+            </div>
+
+            <h3 className="text-base font-extrabold text-gray-900 text-center mb-2">
+              حذف الطالب نهائياً من البرنامج
+            </h3>
+
+            <div className="bg-rose-50/70 border border-rose-100 rounded-2xl p-4 mb-4 text-center">
+              <span className="font-extrabold text-sm text-gray-900 block mb-1">
+                {deletingStudent.user.name || 'طالب علم'}
+              </span>
+              {deletingStudent.user.email && (
+                <span className="text-xs text-gray-500 font-mono block mb-1">
+                  {deletingStudent.user.email}
+                </span>
+              )}
+              <span className="text-[11px] font-bold text-rose-700 block">
+                أنجز {deletingStudent.completedDaysCount} يوماً ({deletingStudent.completionRate}%)
+              </span>
+            </div>
+
+            <p className="text-xs text-gray-600 text-center mb-4 leading-relaxed">
+              هل أنت متأكد من رغبتك في حذف هذا الطالب نهائياً؟
+              <br />
+              <span className="text-rose-600 font-bold">
+                سيتم مسح حسابه وسجلات إنجازه بالكامل من قاعدة البيانات فوراً ولن يظهر بعد ذلك.
+              </span>
+            </p>
+
+            {deleteStudentError && (
+              <p className="text-xs text-rose-600 font-bold text-center mb-3">
+                {deleteStudentError}
+              </p>
+            )}
+
+            <div className="flex items-center justify-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setDeletingStudent(null);
+                  setDeleteStudentError('');
+                }}
+                disabled={isDeletingStudent}
+                className="px-4 py-2 text-xs font-bold text-gray-600 hover:bg-gray-100 rounded-xl transition-colors cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteStudent}
+                disabled={isDeletingStudent}
+                className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl transition-colors cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                {isDeletingStudent ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>جارٍ الحذف من الفايربيز...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>نعم، احذف الطالب نهائياً</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

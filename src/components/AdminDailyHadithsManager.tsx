@@ -203,8 +203,8 @@ export const AdminDailyHadithsManager: React.FC = () => {
   const handleDelete = async (id: string, title: string) => {
     if (!confirm(`هل أنت متأكد من حذف حديث "${title}"؟`)) return;
     try {
-      await deleteDailyHadith(id);
-      setHadiths((prev) => prev.filter((h) => h.id !== id));
+      await deleteDailyHadith(id, selectedDateStr, title);
+      setHadiths((prev) => prev.filter((h) => h.id !== id && h.title !== title));
     } catch (err) {
       console.error('Error deleting hadith:', err);
       alert('تعذر حذف الحديث، يرجى المحاولة لاحقاً');

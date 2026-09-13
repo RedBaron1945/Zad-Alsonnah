@@ -20,6 +20,7 @@ import {
   query,
   where,
   writeBatch,
+  arrayUnion,
 } from 'firebase/firestore';
 
 export const INITIAL_PRACTICES: Practice[] = [
@@ -253,6 +254,7 @@ export async function updateStudentName(
   const cleanName = newName.trim();
   if (!cleanName) return;
   try {
+    // 1. Persist directly to primary 'users' collection in Firestore
     await setDoc(
       doc(db, 'users', uid),
       {
@@ -261,8 +263,117 @@ export async function updateStudentName(
       },
       { merge: true }
     );
+
+    // 2. Also update in legacy 'students' collection if exists
+    try {
+      await setDoc(
+        doc(db, 'students', uid),
+        {
+          name: cleanName,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+    } catch {
+      // Ignore if collection not present
+    }
+
+    // 3. Update userName in existing dailyProgress records for this student so reports & matrix stay in sync
+    try {
+      const q = query(collection(db, 'dailyProgress'), where('userId', '==', uid));
+      const snap = await getDocs(q);
+      const updates = snap.docs.map((d) =>
+        updateDoc(d.ref, { userName: cleanName }).catch(() => {})
+      );
+      await Promise.all(updates);
+    } catch (err) {
+      console.warn('Could not update userName in dailyProgress:', err);
+    }
   } catch (err) {
     console.error('Could not update student name in Firestore:', err);
+    throw err;
+  }
+}
+
+/**
+ * Permanently deletes a student, their profile, and all their daily progress records from Firebase.
+ */
+export async function deleteStudentPermanently(uid: string): Promise<void> {
+  if (!uid) return;
+
+  try {
+    // 1. Delete user profile from 'users' collection
+    try {
+      await deleteDoc(doc(db, 'users', uid));
+    } catch (err) {
+      console.warn('Error deleting users doc:', err);
+    }
+
+    // 2. Delete user profile from legacy 'students' collection if present
+    try {
+      await deleteDoc(doc(db, 'students', uid));
+    } catch {
+      // Ignore
+    }
+
+    // 3. Delete all records from 'dailyProgress' where userId == uid
+    try {
+      const q = query(collection(db, 'dailyProgress'), where('userId', '==', uid));
+      const snap = await getDocs(q);
+      const deletes = snap.docs.map((d) => deleteDoc(d.ref).catch(() => {}));
+      await Promise.all(deletes);
+    } catch (err) {
+      console.warn('Error deleting dailyProgress by userId query:', err);
+    }
+
+    // 3b. Sweep dailyProgress for documents whose docId starts with `${uid}_`
+    try {
+      const allProgSnap = await getDocs(collection(db, 'dailyProgress'));
+      const extraDeletes: Promise<void>[] = [];
+      allProgSnap.forEach((d) => {
+        if (d.id.startsWith(`${uid}_`)) {
+          extraDeletes.push(deleteDoc(d.ref).catch(() => {}));
+        }
+      });
+      if (extraDeletes.length > 0) {
+        await Promise.all(extraDeletes);
+      }
+    } catch (err) {
+      console.warn('Error sweeping dailyProgress for student records:', err);
+    }
+
+    // 4. Delete from legacy 'progress' collection if present
+    try {
+      const qProg = query(collection(db, 'progress'), where('userId', '==', uid));
+      const snapProg = await getDocs(qProg);
+      const deletesProg = snapProg.docs.map((d) => deleteDoc(d.ref).catch(() => {}));
+      await Promise.all(deletesProg);
+    } catch {
+      // Ignore
+    }
+
+    // 5. Add tombstone to 'adminSettings/deletedStudents' so deleted student never reappears
+    try {
+      await setDoc(
+        doc(db, 'adminSettings', 'deletedStudents'),
+        {
+          deletedUids: arrayUnion(uid),
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+    } catch (err) {
+      console.warn('Error saving deletedStudents tombstone:', err);
+    }
+
+    // 6. Clean local storage for this student if on current browser
+    try {
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem(getCompletionsKey(uid));
+      }
+    } catch {}
+  } catch (err) {
+    console.error('Failed to permanently delete student:', err);
     throw err;
   }
 }
@@ -440,13 +551,22 @@ export async function getAdminDashboardData(
     const today = getTodayDateString();
     const effectiveToday = getDefaultSelectedDate();
     const studentsMap = new Map<string, UserProfile>();
-    const currentAuthUid = auth.currentUser?.uid;
 
-    const isExcludedAdmin = (uid: string, email?: string, role?: string) => {
+    // Fetch list of deleted student UIDs to ensure they never reappear
+    const deletedUids = new Set<string>();
+    try {
+      const deletedSnap = await getDoc(doc(db, 'adminSettings', 'deletedStudents'));
+      if (deletedSnap.exists()) {
+        const dData = deletedSnap.data() as any;
+        if (Array.isArray(dData.deletedUids)) {
+          dData.deletedUids.forEach((id: string) => deletedUids.add(id));
+        }
+      }
+    } catch {}
+
+    const isExcludedAdmin = (uid: string) => {
+      if (!uid || deletedUids.has(uid)) return true;
       if (uid === ADMIN_UID) return true;
-      if (currentAuthUid && uid === currentAuthUid && currentAuthUid === ADMIN_UID) return true;
-      if (role === 'admin') return true;
-      if (email && (email.toLowerCase() === 'admin@takween.com' || email.toLowerCase() === 'admin@naseem.sa')) return true;
       return false;
     };
 
@@ -456,7 +576,7 @@ export async function getAdminDashboardData(
       usersSnap.forEach((d) => {
         const u = d.data() as Partial<UserProfile> & Record<string, any>;
         const uid = u.uid || d.id;
-        if (isExcludedAdmin(uid, u.email, u.role)) return;
+        if (isExcludedAdmin(uid)) return;
 
         studentsMap.set(uid, {
           uid,
@@ -476,7 +596,7 @@ export async function getAdminDashboardData(
       legacyStudentsSnap.forEach((d) => {
         const u = d.data() as Partial<UserProfile> & Record<string, any>;
         const uid = u.uid || d.id;
-        if (isExcludedAdmin(uid, u.email, u.role)) return;
+        if (isExcludedAdmin(uid)) return;
 
         if (!studentsMap.has(uid)) {
           studentsMap.set(uid, {
@@ -501,7 +621,7 @@ export async function getAdminDashboardData(
     ) => {
       // Extract userId from p.userId or parse from docId formatted as "uid_date_hadithId"
       const pUserId = p.userId || (docId.includes('_') ? docId.split('_')[0] : '');
-      if (!pUserId || isExcludedAdmin(pUserId, p.userEmail)) return;
+      if (!pUserId || isExcludedAdmin(pUserId)) return;
 
       const pDate = p.date || (docId.includes('_') ? docId.split('_')[1] : '');
       const pPracticeId =

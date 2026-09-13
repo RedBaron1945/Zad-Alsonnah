@@ -113,17 +113,19 @@ export const StudentDashboard: React.FC = () => {
   useEffect(() => {
     if (currentUser && currentUser.uid && currentUser.uid !== ADMIN_UID) {
       const userRef = doc(db, 'users', currentUser.uid);
-      setDoc(
-        userRef,
-        {
-          uid: currentUser.uid,
-          name: (userProfile?.name || currentUser.displayName || 'طالب علم').trim(),
-          email: currentUser.email || userProfile?.email || '',
-          role: 'student',
-          lastSeenAt: new Date().toISOString(),
-        },
-        { merge: true }
-      ).catch((err) => console.warn('Could not sync student profile to Firestore:', err));
+      const updateData: Record<string, any> = {
+        uid: currentUser.uid,
+        email: currentUser.email || userProfile?.email || '',
+        role: 'student',
+        lastSeenAt: new Date().toISOString(),
+      };
+      // Only set name if userProfile has a verified valid name to avoid reverting admin edits
+      if (userProfile?.name && userProfile.name !== 'طالب علم') {
+        updateData.name = userProfile.name.trim();
+      }
+      setDoc(userRef, updateData, { merge: true }).catch((err) =>
+        console.warn('Could not sync student profile to Firestore:', err)
+      );
     }
   }, [currentUser, userProfile?.name, userProfile?.email]);
 

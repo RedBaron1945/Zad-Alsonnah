@@ -26,6 +26,7 @@ export interface DailyHadith {
   order?: number; // 1, 2, 3...
   createdAt?: string;
   updatedAt?: string;
+  deleted?: boolean;
 }
 
 export interface Practice {

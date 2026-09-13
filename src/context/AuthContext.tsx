@@ -7,7 +7,7 @@ import {
   signOut as firebaseSignOut,
   updateProfile,
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
 import { auth, db, googleProvider, ADMIN_UID } from '../lib/firebase';
 import { UserProfile, UserRole } from '../types';
 
@@ -26,8 +26,9 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 // Admin is determined solely by the fixed program-admin UID — no email
-// allowlist. Do not add email-based admin checks here.
-function isAdminUser(uid: string, _email: string | null | undefined): boolean {
+// allowlist, no substring/regex matching. Do not add email-based admin
+// checks here or anywhere else in the app.
+function isAdminUser(uid: string): boolean {
   return uid === ADMIN_UID;
 }
 
@@ -40,15 +41,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const [needsNameInput, setNeedsNameInput] = useState<boolean>(false);
 
   useEffect(() => {
+    let unsubscribeDoc: (() => void) | null = null;
+
     // Single source of truth: Firebase Authentication state listener
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (unsubscribeDoc) {
+        unsubscribeDoc();
+        unsubscribeDoc = null;
+      }
+
       if (user) {
         setCurrentUser(user);
-        const isRealAdmin = isAdminUser(user.uid, user.email);
+        const isRealAdmin = isAdminUser(user.uid);
 
         let profile: UserProfile;
+        const userDocRef = doc(db, 'users', user.uid);
+
         try {
-          const userDocRef = doc(db, 'users', user.uid);
           const userDocSnap = await getDoc(userDocRef);
           if (userDocSnap.exists()) {
             const data = userDocSnap.data();
@@ -101,6 +110,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         } else {
           setNeedsNameInput(!profile.name || profile.name === 'طالب علم' || profile.name.trim().length < 2);
         }
+
+        // Set up real-time listener for user profile document
+        // This ensures that when the admin modifies the student's name in Firestore,
+        // it updates immediately on the student's screen in real time!
+        try {
+          unsubscribeDoc = onSnapshot(userDocRef, (snap) => {
+            if (snap.exists()) {
+              const freshData = snap.data();
+              const freshName = freshData?.name ? String(freshData.name).trim() : '';
+              if (freshName) {
+                setUserProfile((prev) => {
+                  if (!prev) return null;
+                  if (prev.name === freshName) return prev;
+                  return { ...prev, name: freshName };
+                });
+                if (!isRealAdmin && freshName !== 'طالب علم' && freshName.length >= 2) {
+                  setNeedsNameInput(false);
+                }
+              }
+            }
+          });
+        } catch (subErr) {
+          console.warn('Could not establish real-time profile listener:', subErr);
+        }
       } else {
         setCurrentUser(null);
         setUserProfile(null);
@@ -109,7 +142,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       setLoading(false);
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      if (unsubscribeDoc) {
+        unsubscribeDoc();
+      }
+    };
   }, []);
 
   const signInWithGoogle = async (): Promise<FirebaseUser> => {
@@ -156,8 +194,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
     try {
       const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
-      // Strictly verify that the authenticated UID or Email is the authorized administrator
-      const isAllowedAdmin = isAdminUser(cred.user.uid, cred.user.email);
+      // Strictly verify that the authenticated UID is the authorized administrator
+      const isAllowedAdmin = isAdminUser(cred.user.uid);
 
       if (!isAllowedAdmin) {
         await firebaseSignOut(auth);
@@ -199,7 +237,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     }
 
     const uid = auth.currentUser.uid;
-    const isRealAdmin = isAdminUser(uid, auth.currentUser.email);
+    const isRealAdmin = isAdminUser(uid);
 
     // 1. Update Firebase Auth displayName
     try {

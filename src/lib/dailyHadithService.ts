@@ -4,11 +4,13 @@ import { db } from './firebase';
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   setDoc,
   deleteDoc,
   query,
   where,
+  arrayUnion,
 } from 'firebase/firestore';
 
 /**
@@ -169,17 +171,43 @@ function generateHadithsForDate(dateStr: string): DailyHadith[] {
 
 const LOCAL_STORAGE_HADITHS_KEY = 'zad_alsonnah_hadiths_custom';
 const LOCAL_STORAGE_DELETED_KEY = 'zad_alsonnah_hadiths_deleted_ids';
+const LOCAL_STORAGE_DELETED_TITLES_KEY = 'zad_alsonnah_hadiths_deleted_titles';
+
+// Known initial deletions requested by the admin
+const INITIAL_DELETED_IDS = ['hadith_2026-09-12_2'];
+const INITIAL_DELETED_TITLES = ['دعاء دخول المسجد والخروج منه'];
 
 function getDeletedHadithIds(): string[] {
   try {
     const raw = typeof window !== 'undefined' ? localStorage.getItem(LOCAL_STORAGE_DELETED_KEY) : null;
-    return raw ? JSON.parse(raw) : [];
+    const list: string[] = raw ? JSON.parse(raw) : [];
+    for (const initId of INITIAL_DELETED_IDS) {
+      if (!list.includes(initId)) {
+        list.push(initId);
+      }
+    }
+    return list;
   } catch {
-    return [];
+    return [...INITIAL_DELETED_IDS];
   }
 }
 
-function markHadithDeleted(id: string) {
+function getDeletedHadithTitles(): string[] {
+  try {
+    const raw = typeof window !== 'undefined' ? localStorage.getItem(LOCAL_STORAGE_DELETED_TITLES_KEY) : null;
+    const list: string[] = raw ? JSON.parse(raw) : [];
+    for (const initTitle of INITIAL_DELETED_TITLES) {
+      if (!list.includes(initTitle)) {
+        list.push(initTitle);
+      }
+    }
+    return list;
+  } catch {
+    return [...INITIAL_DELETED_TITLES];
+  }
+}
+
+function markHadithDeleted(id: string, title?: string) {
   try {
     if (typeof window === 'undefined') return;
     const list = getDeletedHadithIds();
@@ -187,14 +215,25 @@ function markHadithDeleted(id: string) {
       list.push(id);
       localStorage.setItem(LOCAL_STORAGE_DELETED_KEY, JSON.stringify(list));
     }
+    if (title) {
+      const titles = getDeletedHadithTitles();
+      if (!titles.includes(title)) {
+        titles.push(title);
+        localStorage.setItem(LOCAL_STORAGE_DELETED_TITLES_KEY, JSON.stringify(titles));
+      }
+    }
   } catch {}
 }
 
-function unmarkHadithDeleted(id: string) {
+function unmarkHadithDeleted(id: string, title?: string) {
   try {
     if (typeof window === 'undefined') return;
     const list = getDeletedHadithIds().filter((item) => item !== id);
     localStorage.setItem(LOCAL_STORAGE_DELETED_KEY, JSON.stringify(list));
+    if (title) {
+      const titles = getDeletedHadithTitles().filter((t) => t !== title);
+      localStorage.setItem(LOCAL_STORAGE_DELETED_TITLES_KEY, JSON.stringify(titles));
+    }
   } catch {}
 }
 
@@ -210,7 +249,7 @@ function getLocalHadiths(): Record<string, DailyHadith> {
 function saveLocalHadith(hadith: DailyHadith) {
   try {
     if (typeof window === 'undefined') return;
-    unmarkHadithDeleted(hadith.id);
+    unmarkHadithDeleted(hadith.id, hadith.title);
     const map = getLocalHadiths();
     map[hadith.id] = hadith;
     localStorage.setItem(LOCAL_STORAGE_HADITHS_KEY, JSON.stringify(map));
@@ -219,10 +258,10 @@ function saveLocalHadith(hadith: DailyHadith) {
   }
 }
 
-function deleteLocalHadith(id: string) {
+function deleteLocalHadith(id: string, title?: string) {
   try {
     if (typeof window === 'undefined') return;
-    markHadithDeleted(id);
+    markHadithDeleted(id, title);
     const map = getLocalHadiths();
     delete map[id];
     localStorage.setItem(LOCAL_STORAGE_HADITHS_KEY, JSON.stringify(map));
@@ -239,8 +278,31 @@ export async function getDailyHadithsForDate(
 ): Promise<DailyHadith[]> {
   const localMap = getLocalHadiths();
   const deletedIds = new Set(getDeletedHadithIds());
+  const deletedTitles = new Set(getDeletedHadithTitles());
+
+  // 1. Fetch any central date-level deletion metadata from Firestore
+  try {
+    const metaDocSnap = await getDoc(doc(db, 'dailyHadiths', `__deleted_${dateStr}__`));
+    if (metaDocSnap.exists()) {
+      const metaData = metaDocSnap.data() as any;
+      if (Array.isArray(metaData.deletedIds)) {
+        metaData.deletedIds.forEach((id: string) => {
+          deletedIds.add(id);
+          markHadithDeleted(id);
+        });
+      }
+      if (Array.isArray(metaData.deletedTitles)) {
+        metaData.deletedTitles.forEach((t: string) => {
+          deletedTitles.add(t);
+        });
+      }
+    }
+  } catch (err) {
+    // Non-blocking
+  }
+
   const localHadithsForDate = Object.values(localMap).filter(
-    (h) => h.date === dateStr && !deletedIds.has(h.id)
+    (h) => h.date === dateStr && !deletedIds.has(h.id) && !(h.title && deletedTitles.has(h.title))
   );
 
   let firestoreList: DailyHadith[] = [];
@@ -253,7 +315,13 @@ export async function getDailyHadithsForDate(
     if (!snap.empty) {
       snap.forEach((d) => {
         const data = d.data() as any;
-        if (!data.deleted && !deletedIds.has(d.id)) {
+        if (data.deleted === true) {
+          deletedIds.add(d.id);
+          markHadithDeleted(d.id, data.title);
+          if (data.title) {
+            deletedTitles.add(data.title);
+          }
+        } else if (!deletedIds.has(d.id) && !(data.title && deletedTitles.has(data.title))) {
           firestoreList.push({ ...data, id: d.id } as DailyHadith);
         }
       });
@@ -266,14 +334,31 @@ export async function getDailyHadithsForDate(
   const combinedMap = new Map<string, DailyHadith>();
   const defaultTemplates = generateHadithsForDate(dateStr);
   defaultTemplates.forEach((h) => {
-    if (!deletedIds.has(h.id)) {
+    // If deleted by ID or title, or if a custom hadith with the exact title is in firestore, do not add
+    if (deletedIds.has(h.id) || (h.title && deletedTitles.has(h.title))) {
+      return;
+    }
+    if (firestoreList.some((f) => f.title === h.title)) {
+      return;
+    }
+    combinedMap.set(h.id, h);
+  });
+
+  firestoreList.forEach((h) => {
+    if (!deletedIds.has(h.id) && !(h.title && deletedTitles.has(h.title))) {
       combinedMap.set(h.id, h);
     }
   });
-  firestoreList.forEach((h) => combinedMap.set(h.id, h));
-  localHadithsForDate.forEach((h) => combinedMap.set(h.id, h));
 
-  const result = Array.from(combinedMap.values());
+  localHadithsForDate.forEach((h) => {
+    if (!deletedIds.has(h.id) && !(h.title && deletedTitles.has(h.title))) {
+      combinedMap.set(h.id, h);
+    }
+  });
+
+  const result = Array.from(combinedMap.values()).filter(
+    (h) => !h.deleted && !deletedIds.has(h.id) && !(h.title && deletedTitles.has(h.title))
+  );
   result.sort((a, b) => (a.order || 0) - (b.order || 0));
   return result;
 }
@@ -369,14 +454,66 @@ export async function updateDailyHadith(
   }
 }
 
-export async function deleteDailyHadith(id: string): Promise<void> {
-  deleteLocalHadith(id);
+export async function deleteDailyHadith(
+  id: string,
+  dateStr?: string,
+  title?: string
+): Promise<void> {
+  // Determine effective date for query targeting
+  let effectiveDate = dateStr;
+  if (!effectiveDate) {
+    const match = id.match(/hadith_(\d{4}-\d{2}-\d{2})/);
+    if (match) {
+      effectiveDate = match[1];
+    } else {
+      const localMap = getLocalHadiths();
+      effectiveDate = localMap[id]?.date || '';
+    }
+  }
+
+  deleteLocalHadith(id, title);
+  markHadithDeleted(id, title);
+
+  const tombstone: Record<string, any> = {
+    id,
+    deleted: true,
+    updatedAt: new Date().toISOString(),
+  };
+  if (effectiveDate) {
+    tombstone.date = effectiveDate;
+  }
+  if (title) {
+    tombstone.title = title;
+  }
+
+  // 1. Write tombstone to dailyHadiths collection
   try {
-    await setDoc(doc(db, 'dailyHadiths', id), { id, deleted: true }, { merge: true });
+    await setDoc(doc(db, 'dailyHadiths', id), tombstone, { merge: true });
   } catch (err) {
     try {
-      await deleteDoc(doc(db, 'dailyHadiths', id));
+      await setDoc(doc(db, 'adminSettings', `deleted_${id}`), tombstone, { merge: true });
     } catch {}
+  }
+
+  // 2. Write date-level tombstone array so any client checking the date skips this hadith
+  if (effectiveDate) {
+    try {
+      const metaPayload: Record<string, any> = {
+        date: effectiveDate,
+        deletedIds: arrayUnion(id),
+        updatedAt: new Date().toISOString(),
+      };
+      if (title) {
+        metaPayload.deletedTitles = arrayUnion(title);
+      }
+      await setDoc(
+        doc(db, 'dailyHadiths', `__deleted_${effectiveDate}__`),
+        metaPayload,
+        { merge: true }
+      );
+    } catch (metaErr) {
+      // Non-blocking
+    }
   }
 }
 
