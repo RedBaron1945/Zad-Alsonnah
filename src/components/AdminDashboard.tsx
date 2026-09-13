@@ -22,6 +22,8 @@ import {
 import { StudentDetailsView } from './StudentDetailsView';
 import { AdminDailyHadithsManager } from './AdminDailyHadithsManager';
 import { AdminAchievementMatrix } from './AdminAchievementMatrix';
+import { db } from '../lib/firebase';
+import { collection, onSnapshot } from 'firebase/firestore';
 import {
   Users,
   CheckCircle2,
@@ -92,10 +94,17 @@ export const AdminDashboard: React.FC = () => {
   const loadDashboardData = async () => {
     try {
       setRefreshing(true);
-      const seeded = await ensurePracticesSeeded();
-      setPractices(seeded);
-      const data = await getAdminDashboardData(seeded);
+      const [data, seeded] = await Promise.all([
+        getAdminDashboardData([]),
+        ensurePracticesSeeded().catch((err) => {
+          console.warn('Practice seed non-fatal notice:', err);
+          return [];
+        }),
+      ]);
       setStats(data);
+      if (seeded && seeded.length > 0) {
+        setPractices(seeded);
+      }
     } catch (err) {
       console.error('Error fetching admin data:', err);
     } finally {
@@ -106,6 +115,29 @@ export const AdminDashboard: React.FC = () => {
 
   useEffect(() => {
     loadDashboardData();
+
+    // Listen to real-time changes in users collection
+    const unsubUsers = onSnapshot(
+      collection(db, 'users'),
+      () => {
+        getAdminDashboardData([]).then((data) => setStats(data)).catch(console.warn);
+      },
+      (err) => console.warn('Users snapshot listener error:', err)
+    );
+
+    // Listen to real-time changes in dailyProgress collection
+    const unsubProgress = onSnapshot(
+      collection(db, 'dailyProgress'),
+      () => {
+        getAdminDashboardData([]).then((data) => setStats(data)).catch(console.warn);
+      },
+      (err) => console.warn('Progress snapshot listener error:', err)
+    );
+
+    return () => {
+      unsubUsers();
+      unsubProgress();
+    };
   }, []);
 
   // Filter students by search query
@@ -289,11 +321,11 @@ export const AdminDashboard: React.FC = () => {
             </button>
 
             <button
-              onClick={() => setIsAddingHadith(true)}
+              onClick={() => setActiveTab('hadiths')}
               className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition-all cursor-pointer shadow-xs"
             >
               <PlusCircle className="w-4 h-4" />
-              <span>إضافة حديث جديد</span>
+              <span>إدارة وجدول الأحاديث</span>
             </button>
 
             <button
@@ -513,7 +545,7 @@ export const AdminDashboard: React.FC = () => {
                         <td className="py-3.5 px-4 text-center">
                           <div className="inline-flex items-center gap-1.5 justify-center">
                             {currentWeekInfo.days.map((day) => {
-                              const isDone = (student.recentRecords || []).some(
+                              const isDone = (student.allRecords || student.recentRecords || []).some(
                                 (r) => r.date === day.dateStr && r.completed
                               );
 

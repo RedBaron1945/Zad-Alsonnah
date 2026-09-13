@@ -7,7 +7,8 @@ import {
   PROGRAM_DURATION_WEEKS,
   PROGRAM_TOTAL_HADITHS,
 } from '../types';
-import { db } from './firebase';
+import { db, auth, ADMIN_UID } from './firebase';
+import { getDefaultSelectedDate } from './weekDateUtils';
 import {
   collection,
   doc,
@@ -198,7 +199,14 @@ export async function updatePractice(
   updates: Partial<Practice>
 ): Promise<void> {
   try {
-    await updateDoc(doc(db, 'practices', id), updates);
+    await setDoc(
+      doc(db, 'practices', id),
+      {
+        ...updates,
+        id,
+      },
+      { merge: true }
+    );
   } catch (err) {
     console.warn('Could not update practice in Firestore:', err);
     throw err;
@@ -430,36 +438,147 @@ export async function getAdminDashboardData(
 }> {
   try {
     const today = getTodayDateString();
+    const effectiveToday = getDefaultSelectedDate();
+    const studentsMap = new Map<string, UserProfile>();
+    const currentAuthUid = auth.currentUser?.uid;
 
-    // 1. Fetch all student profiles from Firestore
-    const usersSnap = await getDocs(collection(db, 'users'));
-    const students: UserProfile[] = [];
-    usersSnap.forEach((d) => {
-      const u = d.data() as UserProfile;
-      if (u.role === 'student') {
-        students.push(u);
-      }
-    });
+    const isExcludedAdmin = (uid: string, email?: string, role?: string) => {
+      if (uid === ADMIN_UID) return true;
+      if (currentAuthUid && uid === currentAuthUid && currentAuthUid === ADMIN_UID) return true;
+      if (role === 'admin') return true;
+      if (email && (email.toLowerCase() === 'admin@takween.com' || email.toLowerCase() === 'admin@naseem.sa')) return true;
+      return false;
+    };
+
+    // 1. Fetch all student profiles from Firestore 'users' collection
+    try {
+      const usersSnap = await getDocs(collection(db, 'users'));
+      usersSnap.forEach((d) => {
+        const u = d.data() as Partial<UserProfile> & Record<string, any>;
+        const uid = u.uid || d.id;
+        if (isExcludedAdmin(uid, u.email, u.role)) return;
+
+        studentsMap.set(uid, {
+          uid,
+          name: (u.name || (u as any).displayName || 'طالب علم').trim(),
+          email: u.email || '',
+          role: 'student',
+          createdAt: u.createdAt || new Date().toISOString(),
+        });
+      });
+    } catch (usersErr) {
+      console.warn('Could not read users collection:', usersErr);
+    }
+
+    // 1b. Fallback: check 'students' collection if any legacy documents exist
+    try {
+      const legacyStudentsSnap = await getDocs(collection(db, 'students'));
+      legacyStudentsSnap.forEach((d) => {
+        const u = d.data() as Partial<UserProfile> & Record<string, any>;
+        const uid = u.uid || d.id;
+        if (isExcludedAdmin(uid, u.email, u.role)) return;
+
+        if (!studentsMap.has(uid)) {
+          studentsMap.set(uid, {
+            uid,
+            name: (u.name || (u as any).displayName || 'طالب علم').trim(),
+            email: u.email || '',
+            role: 'student',
+            createdAt: u.createdAt || new Date().toISOString(),
+          });
+        }
+      });
+    } catch {
+      // Ignore if collection not present
+    }
 
     // 2. Fetch all dailyProgress records from Firestore
-    const progressSnap = await getDocs(collection(db, 'dailyProgress'));
     const progressByUser: Record<string, DailyProgress[]> = {};
-    progressSnap.forEach((d) => {
-      const p = d.data() as DailyProgress;
-      if (p.completed && p.userId) {
-        if (!progressByUser[p.userId]) progressByUser[p.userId] = [];
-        progressByUser[p.userId].push(p);
+
+    const processProgressRecord = (
+      docId: string,
+      p: DailyProgress & { userName?: string; userEmail?: string }
+    ) => {
+      // Extract userId from p.userId or parse from docId formatted as "uid_date_hadithId"
+      const pUserId = p.userId || (docId.includes('_') ? docId.split('_')[0] : '');
+      if (!pUserId || isExcludedAdmin(pUserId, p.userEmail)) return;
+
+      const pDate = p.date || (docId.includes('_') ? docId.split('_')[1] : '');
+      const pPracticeId =
+        p.practiceId || (docId.includes('_') ? docId.split('_').slice(2).join('_') : '');
+      const isCompleted = p.completed ?? true;
+
+      if (!isCompleted) return;
+
+      if (!progressByUser[pUserId]) {
+        progressByUser[pUserId] = [];
       }
-    });
+
+      // Avoid duplicate doc records
+      if (!progressByUser[pUserId].some((item) => item.id === docId)) {
+        progressByUser[pUserId].push({
+          ...p,
+          id: docId,
+          userId: pUserId,
+          date: pDate,
+          practiceId: pPracticeId,
+          completed: true,
+        });
+      }
+
+      // If this user was not found in 'users' collection yet, register them
+      const existing = studentsMap.get(pUserId);
+      if (!existing) {
+        studentsMap.set(pUserId, {
+          uid: pUserId,
+          name: (p.userName || 'طالب علم').trim(),
+          email: p.userEmail || '',
+          role: 'student',
+          createdAt: p.completedAt || new Date().toISOString(),
+        });
+      } else if (
+        (existing.name === 'طالب علم' || !existing.name) &&
+        p.userName &&
+        p.userName !== 'طالب علم'
+      ) {
+        // Upgrade placeholder name if a better name is recorded on progress
+        existing.name = p.userName.trim();
+        if (p.userEmail && !existing.email) existing.email = p.userEmail;
+      }
+    };
+
+    try {
+      const progressSnap = await getDocs(collection(db, 'dailyProgress'));
+      progressSnap.forEach((d) => {
+        const p = d.data() as DailyProgress & { userName?: string; userEmail?: string };
+        processProgressRecord(d.id, p);
+      });
+    } catch (progErr) {
+      console.warn('Could not read dailyProgress collection:', progErr);
+    }
+
+    // 2b. Fallback: check legacy 'progress' collection
+    try {
+      const legacyProgressSnap = await getDocs(collection(db, 'progress'));
+      legacyProgressSnap.forEach((d) => {
+        const p = d.data() as DailyProgress & { userName?: string; userEmail?: string };
+        processProgressRecord(d.id, p);
+      });
+    } catch {
+      // Ignore if legacy collection not present
+    }
+
+    const students = Array.from(studentsMap.values());
 
     // 3. Build detailed StudentStats for each student
     const studentsList: StudentStats[] = students.map((user) => {
-      const userRecords = progressByUser[user.uid] || [];
+      const rawRecords = progressByUser[user.uid] || [];
+      const userRecords = [...rawRecords].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
       const distinctDates = Array.from(new Set(userRecords.map((r) => r.date))).sort();
       const completedDaysCount = distinctDates.length;
       const totalCompleted = userRecords.length;
 
-      const todayRecords = userRecords.filter((r) => r.date === today);
+      const todayRecords = userRecords.filter((r) => r.date === today || r.date === effectiveToday);
       const completedTodayCount = todayRecords.length;
       const todayCompletedAll = completedTodayCount >= 2;
 

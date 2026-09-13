@@ -243,7 +243,6 @@ export const LoginPage: React.FC = () => {
                       autoFocus
                       value={adminEmail}
                       onChange={(e) => setAdminEmail(e.target.value)}
-                      placeholder="admin@naseem.sa"
                       disabled={adminLoading}
                       required
                       className="w-full pr-3.5 pl-10 py-2.5 text-sm bg-slate-50/50 border border-slate-300 rounded-xl text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white transition-all font-sans"

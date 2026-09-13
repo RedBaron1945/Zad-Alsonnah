@@ -54,15 +54,18 @@ export const StudentDetailsView: React.FC<StudentDetailsViewProps> = ({
     completedDaysCount,
     completionRate,
     recentRecords,
+    allRecords,
     todayCompletedAll,
     currentStreak = 0,
     maxStreak = 0,
   } = studentStats;
 
+  const recordsToUse = allRecords && allRecords.length > 0 ? allRecords : recentRecords;
+
   const [individualTableMode, setIndividualTableMode] = useState<'weeks' | 'months'>('weeks');
 
   const badgesResult = evaluateStudentBadges(
-    recentRecords,
+    recordsToUse,
     todayCompletedAll
   );
 
@@ -76,13 +79,13 @@ export const StudentDetailsView: React.FC<StudentDetailsViewProps> = ({
   // Map of completed date strings
   const completedDateMap = useMemo(() => {
     const map = new Map<string, number>();
-    recentRecords.forEach((r) => {
+    recordsToUse.forEach((r) => {
       if (r.completed) {
         map.set(r.date, (map.get(r.date) || 0) + 1);
       }
     });
     return map;
-  }, [recentRecords]);
+  }, [recordsToUse]);
 
   // Program phases (9 weeks)
   const phases = [
@@ -624,13 +627,13 @@ export const StudentDetailsView: React.FC<StudentDetailsViewProps> = ({
           سجل الإنجاز والمواظبة اليومية
         </h3>
 
-        {recentRecords.length === 0 ? (
+        {recordsToUse.length === 0 ? (
           <div className="text-center py-10 text-gray-400 text-xs font-medium">
             لم يقم الطالب بتسجيل أي تطبيق حتى الآن.
           </div>
         ) : (
           <div className="space-y-3">
-            {recentRecords.map((record, index) => {
+            {recordsToUse.map((record, index) => {
               const title = practiceTitleMap[record.practiceId] || 'تطبيق سنة نبوية';
               const formattedDate = formatArabicDate(record.date);
 

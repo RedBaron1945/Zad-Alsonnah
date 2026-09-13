@@ -9,7 +9,7 @@ import {
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { auth, db, googleProvider, ADMIN_UID } from '../lib/firebase';
-import { UserProfile } from '../types';
+import { UserProfile, UserRole } from '../types';
 
 interface AuthContextType {
   currentUser: FirebaseUser | null;
@@ -25,6 +25,12 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+// Admin is determined solely by the fixed program-admin UID — no email
+// allowlist. Do not add email-based admin checks here.
+function isAdminUser(uid: string, _email: string | null | undefined): boolean {
+  return uid === ADMIN_UID;
+}
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
@@ -38,7 +44,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         setCurrentUser(user);
-        const isRealAdmin = user.uid === ADMIN_UID;
+        const isRealAdmin = isAdminUser(user.uid, user.email);
 
         let profile: UserProfile;
         try {
@@ -46,16 +52,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           const userDocSnap = await getDoc(userDocRef);
           if (userDocSnap.exists()) {
             const data = userDocSnap.data();
+            const determinedRole: UserRole = isRealAdmin ? 'admin' : 'student';
             profile = {
               uid: user.uid,
-              name: data.name || user.displayName || (isRealAdmin ? 'مدير البرنامج' : 'طالب علم'),
+              name: data.name || user.displayName?.trim() || (isRealAdmin ? 'مدير البرنامج' : 'طالب علم'),
               email: user.email || data.email || '',
-              role: isRealAdmin ? 'admin' : 'student',
+              role: determinedRole,
               createdAt: data.createdAt || user.metadata?.creationTime || new Date().toISOString(),
             };
-            if (isRealAdmin && data.role !== 'admin') {
-              await setDoc(userDocRef, { role: 'admin' }, { merge: true });
-            }
+            // Guarantee that the user document in Firestore has role, name and email persisted
+            await setDoc(
+              userDocRef,
+              {
+                uid: user.uid,
+                name: profile.name,
+                email: profile.email,
+                role: determinedRole,
+                updatedAt: new Date().toISOString(),
+              },
+              { merge: true }
+            );
           } else {
             profile = {
               uid: user.uid,
@@ -64,7 +80,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
               role: isRealAdmin ? 'admin' : 'student',
               createdAt: user.metadata?.creationTime || new Date().toISOString(),
             };
-            await setDoc(userDocRef, profile);
+            await setDoc(userDocRef, profile, { merge: true });
           }
         } catch (err) {
           console.warn('Firestore profile sync fallback:', err);
@@ -140,8 +156,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
     try {
       const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
-      // Strictly verify that the authenticated UID is the authorized administrator UID
-      if (cred.user.uid !== ADMIN_UID) {
+      // Strictly verify that the authenticated UID or Email is the authorized administrator
+      const isAllowedAdmin = isAdminUser(cred.user.uid, cred.user.email);
+
+      if (!isAllowedAdmin) {
         await firebaseSignOut(auth);
         throw new Error('هذا الحساب غير مصرح له بالدخول كمدير للنظام.');
       }
@@ -176,42 +194,53 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     const cleanName = name.trim();
     if (!cleanName) throw new Error('الاسم لا يمكن أن يكون فارغاً');
 
-    if (auth.currentUser) {
-      const uid = auth.currentUser.uid;
-      const isRealAdmin = uid === ADMIN_UID;
-
-      // 1. Update Firebase Auth displayName
-      try {
-        await updateProfile(auth.currentUser, { displayName: cleanName });
-      } catch (err) {
-        console.warn('Could not update Firebase user displayName:', err);
-      }
-
-      // 2. Persist directly to Firestore in 'users' collection with merge: true
-      try {
-        const userDocRef = doc(db, 'users', uid);
-        await setDoc(
-          userDocRef,
-          {
-            uid,
-            name: cleanName,
-            email: auth.currentUser.email || userProfile?.email || '',
-            role: isRealAdmin ? 'admin' : (userProfile?.role || 'student'),
-            updatedAt: new Date().toISOString(),
-          },
-          { merge: true }
-        );
-      } catch (err) {
-        console.error('Could not update Firestore user document:', err);
-        throw err;
-      }
-
-      setCurrentUser({
-        ...auth.currentUser,
-        displayName: cleanName,
-      } as FirebaseUser);
+    if (!auth.currentUser) {
+      throw new Error('يجب تسجيل الدخول أولاً لتعديل الاسم');
     }
-    setUserProfile((prev) => (prev ? { ...prev, name: cleanName } : null));
+
+    const uid = auth.currentUser.uid;
+    const isRealAdmin = isAdminUser(uid, auth.currentUser.email);
+
+    // 1. Update Firebase Auth displayName
+    try {
+      await updateProfile(auth.currentUser, { displayName: cleanName });
+    } catch (err) {
+      console.warn('Could not update Firebase user displayName:', err);
+    }
+
+    // 2. Persist directly to Firestore in 'users' collection with merge: true
+    try {
+      const userDocRef = doc(db, 'users', uid);
+      const updateData: Record<string, any> = {
+        name: cleanName,
+        updatedAt: new Date().toISOString(),
+      };
+      if (auth.currentUser.email) {
+        updateData.email = auth.currentUser.email;
+      }
+      if (isRealAdmin) {
+        updateData.role = 'admin';
+      } else {
+        updateData.role = 'student';
+      }
+      await setDoc(userDocRef, updateData, { merge: true });
+    } catch (err) {
+      console.error('Could not update Firestore user document:', err);
+      throw err;
+    }
+
+    setCurrentUser({
+      ...auth.currentUser,
+      displayName: cleanName,
+    } as FirebaseUser);
+
+    setUserProfile((prev) => (prev ? { ...prev, name: cleanName } : {
+      uid,
+      name: cleanName,
+      email: auth.currentUser?.email || '',
+      role: isRealAdmin ? 'admin' : 'student',
+      createdAt: new Date().toISOString(),
+    }));
   };
 
   const completeStudentName = async (name: string) => {

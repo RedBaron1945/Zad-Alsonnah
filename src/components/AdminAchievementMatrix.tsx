@@ -116,7 +116,7 @@ export const AdminAchievementMatrix: React.FC<AdminAchievementMatrixProps> = ({
       if (viewMode === 'weekly') {
         const weekDates = new Set(currentWeek.days.map((d) => d.dateStr));
         result = result.filter((s) => {
-          const records = s.recentRecords || [];
+          const records = s.allRecords && s.allRecords.length > 0 ? s.allRecords : (s.recentRecords || []);
           const completedDates = new Set(records.filter((r) => r.completed).map((r) => r.date));
           let count = 0;
           weekDates.forEach((dt) => {
@@ -131,7 +131,7 @@ export const AdminAchievementMatrix: React.FC<AdminAchievementMatrixProps> = ({
       if (viewMode === 'weekly') {
         const weekDates = new Set(currentWeek.days.map((d) => d.dateStr));
         result = result.filter((s) => {
-          const records = s.recentRecords || [];
+          const records = s.allRecords && s.allRecords.length > 0 ? s.allRecords : (s.recentRecords || []);
           const completedDates = new Set(records.filter((r) => r.completed).map((r) => r.date));
           let count = 0;
           weekDates.forEach((dt) => {
@@ -147,7 +147,7 @@ export const AdminAchievementMatrix: React.FC<AdminAchievementMatrixProps> = ({
       if (viewMode === 'weekly') {
         const pastDates = currentWeek.days.filter((d) => d.isPast).map((d) => d.dateStr);
         result = result.filter((s) => {
-          const records = s.recentRecords || [];
+          const records = s.allRecords && s.allRecords.length > 0 ? s.allRecords : (s.recentRecords || []);
           const completedDates = new Set(records.filter((r) => r.completed).map((r) => r.date));
           return pastDates.some((dt) => !completedDates.has(dt));
         });
@@ -158,7 +158,7 @@ export const AdminAchievementMatrix: React.FC<AdminAchievementMatrixProps> = ({
           .filter((d) => d.isPast)
           .map((d) => d.dateStr);
         result = result.filter((s) => {
-          const records = s.recentRecords || [];
+          const records = s.allRecords && s.allRecords.length > 0 ? s.allRecords : (s.recentRecords || []);
           const completedDates = new Set(records.filter((r) => r.completed).map((r) => r.date));
           return allPastDays.some((dt) => !completedDates.has(dt));
         });
@@ -175,7 +175,7 @@ export const AdminAchievementMatrix: React.FC<AdminAchievementMatrixProps> = ({
     let totalCompletedDaysInWeek = 0;
 
     students.forEach((s) => {
-      const records = s.recentRecords || [];
+      const records = s.allRecords && s.allRecords.length > 0 ? s.allRecords : (s.recentRecords || []);
       const completedDates = new Set(records.filter((r) => r.completed).map((r) => r.date));
       let count = 0;
       weekDates.forEach((dt) => {
@@ -198,9 +198,11 @@ export const AdminAchievementMatrix: React.FC<AdminAchievementMatrixProps> = ({
 
   // Helper to compute a student's completion on a specific date
   const getStudentDateStatus = (student: StudentStats, dateStr: string) => {
-    const records = (student.recentRecords || []).filter(
-      (r) => r.date === dateStr && r.completed
-    );
+    const records = (
+      student.allRecords && student.allRecords.length > 0
+        ? student.allRecords
+        : student.recentRecords || []
+    ).filter((r) => r.date === dateStr && r.completed);
     return {
       completed: records.length > 0,
       count: records.length,
@@ -211,7 +213,10 @@ export const AdminAchievementMatrix: React.FC<AdminAchievementMatrixProps> = ({
   const getStudentWeekProgress = (student: StudentStats, weekNumber: number) => {
     const wInfo = getProgramWeekInfo(weekNumber);
     const weekDates = new Set(wInfo.days.map((d) => d.dateStr));
-    const records = student.recentRecords || [];
+    const records =
+      student.allRecords && student.allRecords.length > 0
+        ? student.allRecords
+        : student.recentRecords || [];
     const completedDates = new Set(records.filter((r) => r.completed).map((r) => r.date));
 
     let completedDays = 0;

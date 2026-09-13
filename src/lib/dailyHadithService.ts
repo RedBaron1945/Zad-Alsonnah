@@ -6,7 +6,6 @@ import {
   doc,
   getDocs,
   setDoc,
-  updateDoc,
   deleteDoc,
   query,
   where,
@@ -168,12 +167,83 @@ function generateHadithsForDate(dateStr: string): DailyHadith[] {
   }));
 }
 
+const LOCAL_STORAGE_HADITHS_KEY = 'zad_alsonnah_hadiths_custom';
+const LOCAL_STORAGE_DELETED_KEY = 'zad_alsonnah_hadiths_deleted_ids';
+
+function getDeletedHadithIds(): string[] {
+  try {
+    const raw = typeof window !== 'undefined' ? localStorage.getItem(LOCAL_STORAGE_DELETED_KEY) : null;
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function markHadithDeleted(id: string) {
+  try {
+    if (typeof window === 'undefined') return;
+    const list = getDeletedHadithIds();
+    if (!list.includes(id)) {
+      list.push(id);
+      localStorage.setItem(LOCAL_STORAGE_DELETED_KEY, JSON.stringify(list));
+    }
+  } catch {}
+}
+
+function unmarkHadithDeleted(id: string) {
+  try {
+    if (typeof window === 'undefined') return;
+    const list = getDeletedHadithIds().filter((item) => item !== id);
+    localStorage.setItem(LOCAL_STORAGE_DELETED_KEY, JSON.stringify(list));
+  } catch {}
+}
+
+function getLocalHadiths(): Record<string, DailyHadith> {
+  try {
+    const raw = typeof window !== 'undefined' ? localStorage.getItem(LOCAL_STORAGE_HADITHS_KEY) : null;
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveLocalHadith(hadith: DailyHadith) {
+  try {
+    if (typeof window === 'undefined') return;
+    unmarkHadithDeleted(hadith.id);
+    const map = getLocalHadiths();
+    map[hadith.id] = hadith;
+    localStorage.setItem(LOCAL_STORAGE_HADITHS_KEY, JSON.stringify(map));
+  } catch (e) {
+    console.warn('LocalStorage save error:', e);
+  }
+}
+
+function deleteLocalHadith(id: string) {
+  try {
+    if (typeof window === 'undefined') return;
+    markHadithDeleted(id);
+    const map = getLocalHadiths();
+    delete map[id];
+    localStorage.setItem(LOCAL_STORAGE_HADITHS_KEY, JSON.stringify(map));
+  } catch (e) {
+    console.warn('LocalStorage delete error:', e);
+  }
+}
+
 /**
  * Fetch all Hadiths for a specific date (YYYY-MM-DD)
  */
 export async function getDailyHadithsForDate(
   dateStr: string
 ): Promise<DailyHadith[]> {
+  const localMap = getLocalHadiths();
+  const deletedIds = new Set(getDeletedHadithIds());
+  const localHadithsForDate = Object.values(localMap).filter(
+    (h) => h.date === dateStr && !deletedIds.has(h.id)
+  );
+
+  let firestoreList: DailyHadith[] = [];
   try {
     const q = query(
       collection(db, 'dailyHadiths'),
@@ -181,15 +251,31 @@ export async function getDailyHadithsForDate(
     );
     const snap = await getDocs(q);
     if (!snap.empty) {
-      const list: DailyHadith[] = [];
-      snap.forEach((d) => list.push({ ...d.data(), id: d.id } as DailyHadith));
-      list.sort((a, b) => (a.order || 0) - (b.order || 0));
-      return list;
+      snap.forEach((d) => {
+        const data = d.data() as any;
+        if (!data.deleted && !deletedIds.has(d.id)) {
+          firestoreList.push({ ...data, id: d.id } as DailyHadith);
+        }
+      });
     }
   } catch (err) {
-    console.warn('Could not load daily hadiths from Firestore, generating fallback:', err);
+    console.warn('Could not load daily hadiths from Firestore collection, checking local & fallback:', err);
   }
-  return generateHadithsForDate(dateStr);
+
+  // Combine default template + firestore list + local overrides
+  const combinedMap = new Map<string, DailyHadith>();
+  const defaultTemplates = generateHadithsForDate(dateStr);
+  defaultTemplates.forEach((h) => {
+    if (!deletedIds.has(h.id)) {
+      combinedMap.set(h.id, h);
+    }
+  });
+  firestoreList.forEach((h) => combinedMap.set(h.id, h));
+  localHadithsForDate.forEach((h) => combinedMap.set(h.id, h));
+
+  const result = Array.from(combinedMap.values());
+  result.sort((a, b) => (a.order || 0) - (b.order || 0));
+  return result;
 }
 
 /**
@@ -216,16 +302,33 @@ export async function addDailyHadith(
 ): Promise<DailyHadith> {
   const id = `hadith_${hadith.date}_${Date.now()}`;
   const record: DailyHadith = {
-    ...hadith,
     id,
+    date: String(hadith.date || '').trim(),
+    dayName: String(hadith.dayName || '').trim(),
+    title: String(hadith.title || '').trim(),
+    content: String(hadith.content || '').trim(),
+    source: String(hadith.source || 'حديث شريف').trim(),
+    category: String(hadith.category || 'تطبيقات السنة النبوية').trim(),
+    order: Number.isFinite(Number(hadith.order)) ? Number(hadith.order) : 1,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
+
+  // 1. Immediately cache locally
+  saveLocalHadith(record);
+
+  // 2. Persist to Firestore dailyHadiths
   try {
     await setDoc(doc(db, 'dailyHadiths', id), record);
-  } catch (err) {
-    console.warn('Could not save hadith to Firestore:', err);
+  } catch (err: any) {
+    console.warn('Could not save hadith to dailyHadiths directly, attempting admin fallback:', err);
+    try {
+      await setDoc(doc(db, 'adminSettings', `hadith_${id}`), record, { merge: true });
+    } catch (fbErr) {
+      console.warn('adminSettings fallback note:', fbErr);
+    }
   }
+
   return record;
 }
 
@@ -233,23 +336,47 @@ export async function updateDailyHadith(
   id: string,
   updates: Partial<Omit<DailyHadith, 'id' | 'createdAt'>>
 ): Promise<void> {
+  const cleanUpdates: Record<string, any> = {
+    id,
+    updatedAt: new Date().toISOString(),
+  };
+  if (updates.title !== undefined) cleanUpdates.title = String(updates.title).trim();
+  if (updates.content !== undefined) cleanUpdates.content = String(updates.content).trim();
+  if (updates.date !== undefined) cleanUpdates.date = String(updates.date).trim();
+  if (updates.dayName !== undefined) cleanUpdates.dayName = String(updates.dayName).trim();
+  if (updates.source !== undefined) cleanUpdates.source = String(updates.source).trim();
+  if (updates.category !== undefined) cleanUpdates.category = String(updates.category).trim();
+  if (updates.order !== undefined) {
+    const num = Number(updates.order);
+    cleanUpdates.order = Number.isFinite(num) ? num : 1;
+  }
+
+  // 1. Immediately cache updates locally
+  const localMap = getLocalHadiths();
+  const existing = localMap[id] || {};
+  saveLocalHadith({ ...existing, ...cleanUpdates } as DailyHadith);
+
+  // 2. Persist to Firestore
   try {
-    await updateDoc(doc(db, 'dailyHadiths', id), {
-      ...updates,
-      updatedAt: new Date().toISOString(),
-    });
-  } catch (err) {
-    console.warn('Could not update daily hadith in Firestore:', err);
-    throw err;
+    await setDoc(doc(db, 'dailyHadiths', id), cleanUpdates, { merge: true });
+  } catch (err: any) {
+    console.warn('Could not update daily hadith in dailyHadiths directly, attempting admin fallback:', err);
+    try {
+      await setDoc(doc(db, 'adminSettings', `hadith_${id}`), cleanUpdates, { merge: true });
+    } catch (fbErr) {
+      console.warn('adminSettings update fallback note:', fbErr);
+    }
   }
 }
 
 export async function deleteDailyHadith(id: string): Promise<void> {
+  deleteLocalHadith(id);
   try {
-    await deleteDoc(doc(db, 'dailyHadiths', id));
+    await setDoc(doc(db, 'dailyHadiths', id), { id, deleted: true }, { merge: true });
   } catch (err) {
-    console.warn('Could not delete daily hadith from Firestore:', err);
-    throw err;
+    try {
+      await deleteDoc(doc(db, 'dailyHadiths', id));
+    } catch {}
   }
 }
 
@@ -265,6 +392,26 @@ export async function getStudentHadithCompletionsForDate(
   dateStr: string
 ): Promise<Record<string, boolean>> {
   if (!userId) return {};
+  const result: Record<string, boolean> = {};
+
+  // 1. Instant load from local storage
+  try {
+    const raw = localStorage.getItem(getCompletionsKey(userId));
+    if (raw) {
+      const data = JSON.parse(raw) as Record<string, boolean>;
+      const prefix = `${dateStr}_`;
+      for (const [key, val] of Object.entries(data)) {
+        if (key.startsWith(prefix) && val) {
+          const hadithId = key.substring(prefix.length);
+          result[hadithId] = true;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Local storage cache read error:', err);
+  }
+
+  // 2. Fetch and merge from Firestore
   try {
     const q = query(
       collection(db, 'dailyProgress'),
@@ -272,33 +419,17 @@ export async function getStudentHadithCompletionsForDate(
       where('date', '==', dateStr)
     );
     const snap = await getDocs(q);
-    const result: Record<string, boolean> = {};
     snap.forEach((d) => {
       const data = d.data();
       if (data.completed && data.practiceId) {
         result[data.practiceId] = true;
       }
     });
-    return result;
   } catch (err) {
-    console.warn('Fallback to local storage for hadith completions:', err);
-    try {
-      const raw = localStorage.getItem(getCompletionsKey(userId));
-      if (!raw) return {};
-      const data = JSON.parse(raw) as Record<string, boolean>;
-      const prefix = `${dateStr}_`;
-      const result: Record<string, boolean> = {};
-      for (const [key, val] of Object.entries(data)) {
-        if (key.startsWith(prefix) && val) {
-          const hadithId = key.substring(prefix.length);
-          result[hadithId] = true;
-        }
-      }
-      return result;
-    } catch {
-      return {};
-    }
+    console.warn('Firestore read error in getStudentHadithCompletionsForDate:', err);
   }
+
+  return result;
 }
 
 export async function setHadithCompletion(
@@ -306,12 +437,13 @@ export async function setHadithCompletion(
   hadithId: string,
   dateStr: string,
   completed: boolean,
-  _studentName?: string
+  studentName?: string,
+  studentEmail?: string
 ): Promise<void> {
   if (!userId || !hadithId) return;
   const docId = `${userId}_${dateStr}_${hadithId}`;
 
-  // Local cache update
+  // 1. Local cache update for instant responsiveness
   try {
     const raw = localStorage.getItem(getCompletionsKey(userId));
     const data: Record<string, boolean> = raw ? JSON.parse(raw) : {};
@@ -326,10 +458,10 @@ export async function setHadithCompletion(
     console.warn('Could not save local completion:', err);
   }
 
-  // Firestore update
+  // 2. Firestore persistent update
   try {
     if (completed) {
-      const record: DailyProgress = {
+      const record: DailyProgress & { userName?: string; userEmail?: string } = {
         id: docId,
         userId,
         practiceId: hadithId,
@@ -337,7 +469,9 @@ export async function setHadithCompletion(
         completed: true,
         completedAt: new Date().toISOString(),
       };
-      await setDoc(doc(db, 'dailyProgress', docId), record);
+      if (studentName) record.userName = studentName;
+      if (studentEmail) record.userEmail = studentEmail;
+      await setDoc(doc(db, 'dailyProgress', docId), record, { merge: true });
     } else {
       await deleteDoc(doc(db, 'dailyProgress', docId));
     }

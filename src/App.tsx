@@ -36,7 +36,7 @@ const AppContent: React.FC = () => {
   }
 
   // Logged in -> Admin or Student Dashboard
-  const isAdmin = currentUser.uid === ADMIN_UID;
+  const isAdmin = currentUser.uid === ADMIN_UID || userProfile?.role === 'admin';
 
   return (
     <div className="min-h-screen bg-[#F9FAFB] text-gray-900 flex flex-col">

@@ -31,8 +31,9 @@ export const Navbar: React.FC<NavbarProps> = () => {
       setIsSavingName(true);
       await updateProfileName(editNameValue.trim());
       setIsEditingName(false);
-    } catch {
-      setNameError('تعذر حفظ الاسم، يرجى المحاولة ثانية');
+    } catch (err: any) {
+      console.error('Failed to update name in Navbar:', err);
+      setNameError(err?.message || 'تعذر حفظ الاسم، يرجى المحاولة ثانية');
     } finally {
       setIsSavingName(false);
     }

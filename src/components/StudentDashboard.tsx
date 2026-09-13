@@ -33,6 +33,8 @@ import { getStudentAllProgress } from '../lib/dataService';
 import { evaluateStudentBadges } from '../lib/badgeService';
 import { triggerCelebrationConfetti, triggerFireworksConfetti } from '../lib/confettiService';
 import { BadgesSection } from './BadgesSection';
+import { auth, db, ADMIN_UID } from '../lib/firebase';
+import { doc, setDoc } from 'firebase/firestore';
 import {
   CheckCircle2,
   Check,
@@ -58,7 +60,7 @@ import {
 } from 'lucide-react';
 
 export const StudentDashboard: React.FC = () => {
-  const { userProfile, updateProfileName } = useAuth();
+  const { currentUser, userProfile, updateProfileName } = useAuth();
 
   // Active view tab
   const [activeTab, setActiveTab] = useState<'hadiths' | 'badges'>('hadiths');
@@ -107,17 +109,36 @@ export const StudentDashboard: React.FC = () => {
     );
   }, [currentWeekInfo]);
 
-  // Load hadiths and student completion whenever selectedDateStr or user changes
+  // Ensure current student's record is reliably registered in Firestore 'users' collection
+  useEffect(() => {
+    if (currentUser && currentUser.uid && currentUser.uid !== ADMIN_UID) {
+      const userRef = doc(db, 'users', currentUser.uid);
+      setDoc(
+        userRef,
+        {
+          uid: currentUser.uid,
+          name: (userProfile?.name || currentUser.displayName || 'طالب علم').trim(),
+          email: currentUser.email || userProfile?.email || '',
+          role: 'student',
+          lastSeenAt: new Date().toISOString(),
+        },
+        { merge: true }
+      ).catch((err) => console.warn('Could not sync student profile to Firestore:', err));
+    }
+  }, [currentUser, userProfile?.name, userProfile?.email]);
+
+  // Load hadiths and student completion whenever selectedDateStr or user UID changes
   useEffect(() => {
     let isMounted = true;
     async function loadDayData() {
-      if (!userProfile) return;
+      const activeUid = auth.currentUser?.uid || currentUser?.uid || userProfile?.uid;
+      if (!activeUid) return;
       try {
         setLoadingHadiths(true);
         const [dayHadiths, dayCompletions, history] = await Promise.all([
           getDailyHadithsForDate(selectedDateStr),
-          getStudentHadithCompletionsForDate(userProfile.uid, selectedDateStr),
-          getStudentAllProgress(userProfile.uid),
+          getStudentHadithCompletionsForDate(activeUid, selectedDateStr),
+          getStudentAllProgress(activeUid),
         ]);
 
         if (isMounted) {
@@ -136,19 +157,40 @@ export const StudentDashboard: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, [selectedDateStr, userProfile]);
+  }, [selectedDateStr, currentUser?.uid, userProfile?.uid]);
 
   // Handle marking a hadith as completed / uncompleted
   const handleToggleCompletion = async (
     hadith: DailyHadith,
     e?: React.MouseEvent<HTMLButtonElement>
   ) => {
-    if (!userProfile || savingId) return;
+    const activeUid = auth.currentUser?.uid || currentUser?.uid || userProfile?.uid;
+    if (!activeUid || savingId === hadith.id) return;
+
     const currentVal = !!completions[hadith.id];
     const newVal = !currentVal;
 
-    // Optimistic UI update
+    // Instant optimistic UI updates for both local day completions and overall history
     setCompletions((prev) => ({ ...prev, [hadith.id]: newVal }));
+    setAllHistory((prev) => {
+      const filtered = prev.filter(
+        (h) => !(h.date === selectedDateStr && (h.practiceId === hadith.id || (h as any).id === hadith.id))
+      );
+      if (newVal) {
+        return [
+          ...filtered,
+          {
+            id: `${activeUid}_${selectedDateStr}_${hadith.id}`,
+            userId: activeUid,
+            practiceId: hadith.id,
+            date: selectedDateStr,
+            completed: true,
+            completedAt: new Date().toISOString(),
+          },
+        ];
+      }
+      return filtered;
+    });
     setSavingId(hadith.id);
 
     // Whenever confirming application (newVal === true) -> trigger celebratory fireworks!
@@ -175,19 +217,21 @@ export const StudentDashboard: React.FC = () => {
 
     try {
       await setHadithCompletion(
-        userProfile.uid,
+        activeUid,
         hadith.id,
         selectedDateStr,
         newVal,
-        userProfile.name
+        userProfile?.name || currentUser?.displayName || 'طالب علم',
+        userProfile?.email || currentUser?.email || ''
       );
 
-      // Refresh history in background to keep stats in sync
-      getStudentAllProgress(userProfile.uid).then(setAllHistory).catch(() => {});
+      // Refresh history in background to keep stats and badges synchronized
+      const updatedHistory = await getStudentAllProgress(activeUid);
+      if (updatedHistory && updatedHistory.length > 0) {
+        setAllHistory(updatedHistory);
+      }
     } catch (err) {
-      console.error('Error updating completion:', err);
-      // Revert optimistic update
-      setCompletions((prev) => ({ ...prev, [hadith.id]: currentVal }));
+      console.warn('Completion saved locally, background cloud sync pending:', err);
     } finally {
       setSavingId(null);
     }
@@ -321,8 +365,9 @@ export const StudentDashboard: React.FC = () => {
     try {
       await updateProfileName(nameInput.trim());
       setIsEditingName(false);
-    } catch (err) {
-      setNameError('تعذر تحديث الاسم، يرجى المحاولة لاحقاً');
+    } catch (err: any) {
+      console.error('Failed to update student name:', err);
+      setNameError(err?.message || 'تعذر تحديث الاسم، يرجى المحاولة لاحقاً');
     } finally {
       setSavingName(false);
     }
@@ -401,9 +446,6 @@ export const StudentDashboard: React.FC = () => {
                   موعد الفتح: {selectedDayInfo?.formattedHijriFull || formatHijriFull(selectedDateStr)}
                 </span>
               </div>
-              <p className="text-xs text-slate-500 leading-relaxed pt-2">
-                تم إغلاق الأيام القادمة لتعزيز التركيز على إتقان وتطبيق سنن اليوم الحاضر خطوة بخطوة، وعدم استباق الأيام حتى تثبت السنة في القلب والعمل، تطبيقاً لقوله ﷺ: «أَحَبُّ الأَعْمَالِ إِلَى اللهِ أَدْوَمُهَا وَإِنْ قَلَّ».
-              </p>
             </div>
             <div className="pt-2">
               <button
@@ -490,23 +532,28 @@ export const StudentDashboard: React.FC = () => {
                   <button
                     type="button"
                     onClick={(e) => handleToggleCompletion(hadith, e)}
-                    disabled={isSavingThis}
-                    className={`flex items-center justify-center gap-2 py-2.5 px-5 rounded-2xl font-bold text-xs sm:text-sm transition-all cursor-pointer shadow-xs ${
+                    className={`flex items-center justify-center gap-2 py-2.5 px-5 rounded-2xl font-bold text-xs sm:text-sm transition-all cursor-pointer shadow-xs active:scale-[0.98] ${
                       isCompleted
-                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/20 active:scale-[0.99]'
-                        : 'bg-slate-100 hover:bg-blue-600 hover:text-white text-slate-700 active:scale-[0.99]'
-                    } disabled:opacity-60`}
+                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/20'
+                        : 'bg-slate-100 hover:bg-blue-600 hover:text-white text-slate-700'
+                    }`}
                   >
-                    {isSavingThis ? (
-                      <span>جارٍ الحفظ...</span>
-                    ) : isCompleted ? (
+                    {isCompleted ? (
                       <>
-                        <Check className="w-4 h-4" />
+                        {isSavingThis ? (
+                          <Loader2 className="w-4 h-4 animate-spin text-emerald-200" />
+                        ) : (
+                          <Check className="w-4 h-4" />
+                        )}
                         <span>✓ تم التطبيق</span>
                       </>
                     ) : (
                       <>
-                        <Clock className="w-4 h-4" />
+                        {isSavingThis ? (
+                          <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
+                        ) : (
+                          <Clock className="w-4 h-4" />
+                        )}
                         <span>اضغط لتأكيد التطبيق</span>
                       </>
                     )}

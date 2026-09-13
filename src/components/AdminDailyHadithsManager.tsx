@@ -154,31 +154,46 @@ export const AdminDailyHadithsManager: React.FC = () => {
     try {
       if (editingHadith) {
         // Update existing
-        await updateDailyHadith(editingHadith.id, {
+        const updates = {
+          date: editingHadith.date || selectedDateStr,
+          dayName: editingHadith.dayName || selectedDayInfo?.dayName || '',
           title: formTitle.trim(),
           content: formContent.trim(),
-          source: formSource.trim(),
-          category: formCategory.trim(),
-          order: Number(formOrder),
-        });
+          source: formSource.trim() || 'حديث شريف',
+          category: formCategory.trim() || 'تطبيقات السنة النبوية',
+          order: Number(formOrder) || 1,
+        };
+        await updateDailyHadith(editingHadith.id, updates);
+        setHadiths((prev) =>
+          prev.map((h) => (h.id === editingHadith.id ? { ...h, ...updates } : h))
+        );
       } else {
         // Add new
-        await addDailyHadith({
+        const newHadith = {
           date: selectedDateStr,
           dayName: selectedDayInfo?.dayName || '',
           title: formTitle.trim(),
           content: formContent.trim(),
-          source: formSource.trim(),
-          category: formCategory.trim(),
-          order: Number(formOrder),
-        });
+          source: formSource.trim() || 'حديث شريف',
+          category: formCategory.trim() || 'تطبيقات السنة النبوية',
+          order: Number(formOrder) || hadiths.length + 1,
+        };
+        const created = await addDailyHadith(newHadith);
+        setHadiths((prev) => [...prev, created]);
       }
 
       setIsModalOpen(false);
-      await loadHadiths();
-    } catch (err) {
+      // Background refresh from Firestore
+      loadHadiths().catch(() => {});
+    } catch (err: any) {
       console.error('Error saving hadith:', err);
-      setFormError('تعذر حفظ الحديث، يرجى المحاولة لاحقاً');
+      const code = err?.code || '';
+      const msg = err?.message || '';
+      if (code === 'permission-denied' || msg.includes('permission')) {
+        setFormError('تعذر الحفظ: رفض الفايربيز العملية بسبب نقص الصلاحية (Permission Denied). يرجى التأكد من تحديث Rules الفايربيز إلى القواعد المعتمدة.');
+      } else {
+        setFormError(msg ? `تعذر حفظ الحديث: ${msg}` : 'تعذر حفظ الحديث، يرجى المحاولة لاحقاً');
+      }
     } finally {
       setIsSaving(false);
     }
