@@ -19,9 +19,17 @@
 - Firebase (Authentication + Firestore)
 - lucide-react للأيقونات، canvas-confetti للاحتفال
 
+## النشر على Cloudflare Pages
+
+عند ربط مستودع GitHub بمشروع Cloudflare Pages، تأكد من الإعدادات التالية (Settings > Build & deployments):
+
+- **Build command:** `npm run build`
+- **Build output directory:** `dist`
+- **إصدار Node.js:** المشروع يستخدم Vite 6 وTailwind CSS 4 اللذان يتطلبان Node.js 20 أو أحدث. المستودع يحدد ذلك عبر ملف `.node-version` وحقل `engines.node` في `package.json`، لكن Cloudflare Pages (نظام البناء V2) لا يزال افتراضياً يستخدم إصداراً أقدم من Node.js ما لم تحدده صراحةً. أضف متغير بيئة `NODE_VERSION=20` في إعدادات المشروع على Cloudflare إن استمر فشل البناء، أو رقّي "Build system version" إلى v3 من نفس صفحة الإعدادات.
+
 ## التشغيل محلياً
 
-**المتطلبات:** Node.js (نسخة 18 أو أحدث)
+**المتطلبات:** Node.js (نسخة 20 أو أحدث)
 
 ```bash
 npm install
