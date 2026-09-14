@@ -4,6 +4,10 @@ import { getFirestore } from 'firebase/firestore';
 
 export const ADMIN_UID = 'WZcxWpG1PLgQYbnegHndxlrxHVx2';
 
+export function isAdminUser(uid: string | null | undefined): boolean {
+  return Boolean(uid && uid === ADMIN_UID);
+}
+
 const firebaseConfig = {
   apiKey: "AIzaSyA9hyROkYM98KeJOotBqYtLqn7CrSl8qVc",
   authDomain: "zad-alsonnah.firebaseapp.com",

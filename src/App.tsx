@@ -1,6 +1,6 @@
 import React from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { ADMIN_UID } from './lib/firebase';
+import { isAdminUser } from './lib/firebase';
 import { Navbar } from './components/Navbar';
 import { LoginPage } from './components/LoginPage';
 import { StudentDashboard } from './components/StudentDashboard';
@@ -36,7 +36,7 @@ const AppContent: React.FC = () => {
   }
 
   // Logged in -> Admin or Student Dashboard
-  const isAdmin = currentUser.uid === ADMIN_UID || userProfile?.role === 'admin';
+  const isAdmin = isAdminUser(currentUser.uid);
 
   return (
     <div className="min-h-screen bg-[#F9FAFB] text-gray-900 flex flex-col">

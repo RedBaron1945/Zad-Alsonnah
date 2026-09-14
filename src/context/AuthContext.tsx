@@ -7,9 +7,10 @@ import {
   signOut as firebaseSignOut,
   updateProfile,
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
-import { auth, db, googleProvider, ADMIN_UID } from '../lib/firebase';
+import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
+import { auth, db, googleProvider, isAdminUser } from '../lib/firebase';
 import { UserProfile, UserRole } from '../types';
+import { validateAndNormalizeArabicName } from '../lib/nameValidation';
 
 interface AuthContextType {
   currentUser: FirebaseUser | null;
@@ -19,18 +20,12 @@ interface AuthContextType {
   signInWithGoogle: () => Promise<FirebaseUser>;
   signInWithAdminEmail: (email: string, password: string) => Promise<void>;
   updateProfileName: (name: string) => Promise<void>;
+  confirmStudentName: (name: string) => Promise<void>;
   completeStudentName: (name: string) => Promise<void>;
   signOut: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-// Admin is determined solely by the fixed program-admin UID — no email
-// allowlist, no substring/regex matching. Do not add email-based admin
-// checks here or anywhere else in the app.
-function isAdminUser(uid: string): boolean {
-  return uid === ADMIN_UID;
-}
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
@@ -62,25 +57,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           if (userDocSnap.exists()) {
             const data = userDocSnap.data();
             const determinedRole: UserRole = isRealAdmin ? 'admin' : 'student';
+            const isConfirmed = isRealAdmin ? true : Boolean(data.nameConfirmed);
+
             profile = {
               uid: user.uid,
               name: data.name || user.displayName?.trim() || (isRealAdmin ? 'مدير البرنامج' : 'طالب علم'),
               email: user.email || data.email || '',
               role: determinedRole,
               createdAt: data.createdAt || user.metadata?.creationTime || new Date().toISOString(),
+              nameConfirmed: isConfirmed,
+              nameConfirmedAt: data.nameConfirmedAt || '',
             };
-            // Guarantee that the user document in Firestore has role, name and email persisted
-            await setDoc(
-              userDocRef,
-              {
-                uid: user.uid,
-                name: profile.name,
-                email: profile.email,
-                role: determinedRole,
-                updatedAt: new Date().toISOString(),
-              },
-              { merge: true }
-            );
+
+            // Guarantee that the user document in Firestore has role, email, etc.
+            // without overwriting existing name or nameConfirmed
+            const baseUpdate: Record<string, any> = {
+              uid: user.uid,
+              email: profile.email,
+              role: determinedRole,
+              updatedAt: new Date().toISOString(),
+            };
+            if (data.name) {
+              baseUpdate.name = data.name;
+            }
+            if (data.nameConfirmed !== undefined) {
+              baseUpdate.nameConfirmed = data.nameConfirmed;
+            }
+            await setDoc(userDocRef, baseUpdate, { merge: true });
           } else {
             profile = {
               uid: user.uid,
@@ -88,6 +91,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
               email: user.email || '',
               role: isRealAdmin ? 'admin' : 'student',
               createdAt: user.metadata?.creationTime || new Date().toISOString(),
+              nameConfirmed: isRealAdmin ? true : false,
+              nameConfirmedAt: isRealAdmin ? new Date().toISOString() : '',
             };
             await setDoc(userDocRef, profile, { merge: true });
           }
@@ -99,35 +104,46 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
             email: user.email || '',
             role: isRealAdmin ? 'admin' : 'student',
             createdAt: user.metadata?.creationTime || new Date().toISOString(),
+            nameConfirmed: isRealAdmin ? true : false,
+            nameConfirmedAt: isRealAdmin ? new Date().toISOString() : '',
           };
         }
 
         setUserProfile(profile);
 
-        // Admins never need the student name prompt
+        // Name confirmation check:
+        // Admins never need the student name prompt.
+        // For students: If name is not confirmed (missing or false),
+        // the mandatory name confirmation modal MUST block access!
         if (isRealAdmin) {
           setNeedsNameInput(false);
         } else {
-          setNeedsNameInput(!profile.name || profile.name === 'طالب علم' || profile.name.trim().length < 2);
+          setNeedsNameInput(profile.nameConfirmed !== true);
         }
 
         // Set up real-time listener for user profile document
         // This ensures that when the admin modifies the student's name in Firestore,
-        // it updates immediately on the student's screen in real time!
+        // or resets their confirmation status, it updates immediately on the student's screen in real time!
         try {
           unsubscribeDoc = onSnapshot(userDocRef, (snap) => {
             if (snap.exists()) {
               const freshData = snap.data();
               const freshName = freshData?.name ? String(freshData.name).trim() : '';
-              if (freshName) {
-                setUserProfile((prev) => {
-                  if (!prev) return null;
-                  if (prev.name === freshName) return prev;
-                  return { ...prev, name: freshName };
-                });
-                if (!isRealAdmin && freshName !== 'طالب علم' && freshName.length >= 2) {
-                  setNeedsNameInput(false);
-                }
+              const freshConfirmed = Boolean(freshData?.nameConfirmed);
+
+              setUserProfile((prev) => {
+                if (!prev) return null;
+                return {
+                  ...prev,
+                  name: freshName || prev.name,
+                  nameConfirmed: isRealAdmin ? true : freshConfirmed,
+                  nameConfirmedAt: freshData?.nameConfirmedAt || prev.nameConfirmedAt,
+                };
+              });
+
+              if (!isRealAdmin) {
+                // If admin resets confirmation or student confirms, react immediately in real time
+                setNeedsNameInput(!freshConfirmed);
               }
             }
           });
@@ -195,9 +211,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
       // Strictly verify that the authenticated UID is the authorized administrator
-      const isAllowedAdmin = isAdminUser(cred.user.uid);
-
-      if (!isAllowedAdmin) {
+      if (!isAdminUser(cred.user.uid)) {
         await firebaseSignOut(auth);
         throw new Error('هذا الحساب غير مصرح له بالدخول كمدير للنظام.');
       }
@@ -228,6 +242,87 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
+  const confirmStudentName = async (name: string) => {
+    if (!auth.currentUser) {
+      throw new Error('يجب تسجيل الدخول أولاً لتأكيد الاسم');
+    }
+
+    const validation = validateAndNormalizeArabicName(name);
+    if (!validation.isValid) {
+      throw new Error(validation.error || 'الاسم غير مطابق للمواصفات المطلوبة');
+    }
+
+    const cleanName = validation.normalizedName;
+    const uid = auth.currentUser.uid;
+    const nowISO = new Date().toISOString();
+
+    // 1. Update Firebase Auth displayName
+    try {
+      await updateProfile(auth.currentUser, { displayName: cleanName });
+    } catch (err) {
+      console.warn('Could not update Firebase user displayName:', err);
+    }
+
+    // 2. Persist directly to Firestore in 'users' collection with nameConfirmed: true
+    try {
+      const userDocRef = doc(db, 'users', uid);
+      await setDoc(
+        userDocRef,
+        {
+          uid,
+          name: cleanName,
+          email: auth.currentUser.email || '',
+          role: 'student',
+          nameConfirmed: true,
+          nameConfirmedAt: nowISO,
+          updatedAt: nowISO,
+        },
+        { merge: true }
+      );
+    } catch (err) {
+      console.error('Could not confirm student name in Firestore:', err);
+      throw err;
+    }
+
+    // 3. Also update in legacy 'students' collection if exists
+    try {
+      await setDoc(
+        doc(db, 'students', uid),
+        {
+          uid,
+          name: cleanName,
+          nameConfirmed: true,
+          nameConfirmedAt: nowISO,
+          updatedAt: nowISO,
+        },
+        { merge: true }
+      );
+    } catch {
+      // Ignore if not present
+    }
+
+    setCurrentUser({
+      ...auth.currentUser,
+      displayName: cleanName,
+    } as FirebaseUser);
+
+    setUserProfile((prev) =>
+      prev
+        ? { ...prev, name: cleanName, nameConfirmed: true, nameConfirmedAt: nowISO }
+        : {
+            uid,
+            name: cleanName,
+            email: auth.currentUser?.email || '',
+            role: 'student',
+            createdAt: nowISO,
+            nameConfirmed: true,
+            nameConfirmedAt: nowISO,
+          }
+    );
+
+    setNeedsNameInput(false);
+  };
+
   const updateProfileName = async (name: string) => {
     const cleanName = name.trim();
     if (!cleanName) throw new Error('الاسم لا يمكن أن يكون فارغاً');
@@ -238,6 +333,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
     const uid = auth.currentUser.uid;
     const isRealAdmin = isAdminUser(uid);
+
+    // If not admin and user's name is already confirmed, forbid modification
+    if (!isRealAdmin && userProfile?.nameConfirmed) {
+      throw new Error('تم تأكيد اسمك مسبقاً، تعديل الأسماء بعد التأكيد خاص بإدارة البرنامج فقط');
+    }
 
     // 1. Update Firebase Auth displayName
     try {
@@ -282,8 +382,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const completeStudentName = async (name: string) => {
-    await updateProfileName(name);
-    setNeedsNameInput(false);
+    await confirmStudentName(name);
   };
 
   const signOut = async () => {
@@ -307,6 +406,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         signInWithGoogle,
         signInWithAdminEmail,
         updateProfileName,
+        confirmStudentName,
         completeStudentName,
         signOut,
       }}

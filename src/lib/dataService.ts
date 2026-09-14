@@ -7,7 +7,7 @@ import {
   PROGRAM_DURATION_WEEKS,
   PROGRAM_TOTAL_HADITHS,
 } from '../types';
-import { db, auth, ADMIN_UID } from './firebase';
+import { db, auth, isAdminUser } from './firebase';
 import { getDefaultSelectedDate } from './weekDateUtils';
 import {
   collection,
@@ -248,19 +248,26 @@ export async function saveUserProfile(profile: UserProfile): Promise<void> {
 
 export async function updateStudentName(
   uid: string,
-  newName: string
+  newName: string,
+  resetConfirmation: boolean = false
 ): Promise<void> {
   if (!uid) return;
   const cleanName = newName.trim();
   if (!cleanName) return;
   try {
+    const updatePayload: Record<string, any> = {
+      name: cleanName,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (resetConfirmation) {
+      updatePayload.nameConfirmed = false;
+    }
+
     // 1. Persist directly to primary 'users' collection in Firestore
     await setDoc(
       doc(db, 'users', uid),
-      {
-        name: cleanName,
-        updatedAt: new Date().toISOString(),
-      },
+      updatePayload,
       { merge: true }
     );
 
@@ -268,10 +275,7 @@ export async function updateStudentName(
     try {
       await setDoc(
         doc(db, 'students', uid),
-        {
-          name: cleanName,
-          updatedAt: new Date().toISOString(),
-        },
+        updatePayload,
         { merge: true }
       );
     } catch {
@@ -291,6 +295,32 @@ export async function updateStudentName(
     }
   } catch (err) {
     console.error('Could not update student name in Firestore:', err);
+    throw err;
+  }
+}
+
+/**
+ * Allows the admin to reset or toggle a student's name confirmation status.
+ * If set to false, the student will be presented with the mandatory name confirmation modal upon next login.
+ */
+export async function setStudentNameConfirmation(
+  uid: string,
+  confirmed: boolean
+): Promise<void> {
+  if (!uid) return;
+  try {
+    const userDocRef = doc(db, 'users', uid);
+    await setDoc(
+      userDocRef,
+      {
+        nameConfirmed: confirmed,
+        updatedAt: new Date().toISOString(),
+        ...(confirmed ? { nameConfirmedAt: new Date().toISOString() } : {}),
+      },
+      { merge: true }
+    );
+  } catch (err) {
+    console.error('Could not set student name confirmation status:', err);
     throw err;
   }
 }
@@ -551,6 +581,7 @@ export async function getAdminDashboardData(
     const today = getTodayDateString();
     const effectiveToday = getDefaultSelectedDate();
     const studentsMap = new Map<string, UserProfile>();
+    const currentAuthUid = auth.currentUser?.uid;
 
     // Fetch list of deleted student UIDs to ensure they never reappear
     const deletedUids = new Set<string>();
@@ -566,8 +597,7 @@ export async function getAdminDashboardData(
 
     const isExcludedAdmin = (uid: string) => {
       if (!uid || deletedUids.has(uid)) return true;
-      if (uid === ADMIN_UID) return true;
-      return false;
+      return isAdminUser(uid);
     };
 
     // 1. Fetch all student profiles from Firestore 'users' collection
@@ -584,6 +614,8 @@ export async function getAdminDashboardData(
           email: u.email || '',
           role: 'student',
           createdAt: u.createdAt || new Date().toISOString(),
+          nameConfirmed: Boolean(u.nameConfirmed),
+          nameConfirmedAt: u.nameConfirmedAt || '',
         });
       });
     } catch (usersErr) {
@@ -605,6 +637,8 @@ export async function getAdminDashboardData(
             email: u.email || '',
             role: 'student',
             createdAt: u.createdAt || new Date().toISOString(),
+            nameConfirmed: Boolean(u.nameConfirmed),
+            nameConfirmedAt: u.nameConfirmedAt || '',
           });
         }
       });

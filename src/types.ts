@@ -13,6 +13,8 @@ export interface UserProfile {
   email: string;
   role: UserRole;
   createdAt: string;
+  nameConfirmed?: boolean;
+  nameConfirmedAt?: string;
 }
 
 export interface DailyHadith {

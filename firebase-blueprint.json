@@ -25,6 +25,14 @@
         "createdAt": {
           "type": "string",
           "description": "تاريخ إنشاء الحساب"
+        },
+        "nameConfirmed": {
+          "type": "boolean",
+          "description": "هل قام الطالب بتأكيد اسمه الثلاثي بالعربية بشكل نهائي"
+        },
+        "nameConfirmedAt": {
+          "type": "string",
+          "description": "تاريخ ووقت تأكيد الطالب لاسمه"
         }
       },
       "required": ["uid", "name", "email", "role"]

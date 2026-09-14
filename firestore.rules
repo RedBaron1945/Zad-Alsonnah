@@ -6,80 +6,97 @@ service cloud.firestore {
     // =====================================================
     // 1. ADMIN HELPER (صلاحيات الإدارة)
     // =====================================================
-    function isAuthenticated() {
-      return request.auth != null;
-    }
-
-    // Admin = the fixed program-admin UID only. No email matching of any
-    // kind — an email must never grant admin rights.
     function isAdmin() {
-      return isAuthenticated() && request.auth.uid == 'WZcxWpG1PLgQYbnegHndxlrxHVx2';
-    }
-
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
+      return request.auth != null && request.auth.uid == 'WZcxWpG1PLgQYbnegHndxlrxHVx2';
     }
 
     // =====================================================
     // 2. DAILY HADITHS (الأحاديث النبوية المعتمدة)
     // =====================================================
     match /dailyHadiths/{hadithId} {
-      // القراءة للمستخدمين المسجّلين فقط (طلاب وإدارة)
-      allow read: if isAuthenticated();
+      // قراءة الأحاديث متاحة للجميع
+      allow read: if true;
 
-      // الإضافة والتعديل والحذف من الإدارة فقط
-      allow create, update, delete: if isAdmin();
+      // إضافة أو تعديل أو حذف الأحاديث من الإدارة فقط
+      allow write: if isAdmin();
     }
 
     // =====================================================
     // 3. PRACTICES (السنن والآداب النبوية)
     // =====================================================
     match /practices/{practiceId} {
-      allow read: if isAuthenticated();
-      allow create, update, delete: if isAdmin();
+      // قراءة السنن والآداب متاحة للجميع
+      allow read: if true;
+
+      // إضافة أو تعديل أو حذف السنن من الإدارة فقط
+      allow write: if isAdmin();
     }
 
     // =====================================================
     // 4. DAILY PROGRESS (سجلات إنجاز الطلاب اليومية)
     // =====================================================
     match /dailyProgress/{progressId} {
-      // الطالب يقرأ سجله فقط، والإدارة تقرأ سجلات الجميع (للوحة الإدارة)
-      allow read: if (isAuthenticated() && resource.data.userId == request.auth.uid) || isAdmin();
+      // الطالب يقرأ سجله فقط، والإدارة تقرأ سجلات الجميع (للوحة الإدارة ومصفوفة الإنجاز)
+      allow read: if isAdmin() || (request.auth != null && resource.data.userId == request.auth.uid);
 
-      // الطالب يسجل/يعدّل/يحذف إنجازه الخاص فقط، والإدارة لها الصلاحية الكاملة
-      allow create: if (isAuthenticated() && request.resource.data.userId == request.auth.uid) || isAdmin();
-      allow update: if (isAuthenticated() &&
-        resource.data.userId == request.auth.uid &&
-        request.resource.data.userId == request.auth.uid) || isAdmin();
-      allow delete: if (isAuthenticated() && resource.data.userId == request.auth.uid) || isAdmin();
+      // الطالب يسجل ويعدل إنجازه الخاص فقط، والإدارة تستطيع الكتابة للجميع
+      allow create, update: if isAdmin() || (
+        request.auth != null &&
+        request.resource.data.userId == request.auth.uid
+      );
+      allow delete: if isAdmin() || (
+        request.auth != null &&
+        resource.data.userId == request.auth.uid
+      );
     }
 
-    // توافقية إضافية مع مجموعة progress القديمة (نفس القواعد)
+    // توافقية إضافية مع مجموعة progress
     match /progress/{progressId} {
-      allow read: if (isAuthenticated() && resource.data.userId == request.auth.uid) || isAdmin();
-      allow create: if (isAuthenticated() && request.resource.data.userId == request.auth.uid) || isAdmin();
-      allow update: if (isAuthenticated() &&
-        resource.data.userId == request.auth.uid &&
-        request.resource.data.userId == request.auth.uid) || isAdmin();
-      allow delete: if (isAuthenticated() && resource.data.userId == request.auth.uid) || isAdmin();
+      allow read: if isAdmin() || (request.auth != null && resource.data.userId == request.auth.uid);
+      allow create, update: if isAdmin() || (
+        request.auth != null &&
+        request.resource.data.userId == request.auth.uid
+      );
+      allow delete: if isAdmin() || (
+        request.auth != null &&
+        resource.data.userId == request.auth.uid
+      );
     }
 
     // =====================================================
     // 5. USERS (ملفات وحسابات المستخدمين والطلاب)
     // =====================================================
     match /users/{userId} {
-      // كل مستخدم يقرأ ملفه فقط، والإدارة تقرأ ملفات الجميع (للوحة الإدارة)
-      allow read: if isOwner(userId) || isAdmin();
+      // كل مستخدم يقرأ ملفه فقط، والإدارة تقرأ ملفات الجميع (لعرض أسماء الطلاب في لوحة الإدارة)
+      allow read: if isAdmin() || (request.auth != null && request.auth.uid == userId);
 
-      allow create: if (isOwner(userId) &&
-        (!('role' in request.resource.data) || request.resource.data.role == 'student' || isAdmin())
-      ) || isAdmin();
+      // إنشاء الحساب متاح للمستخدم نفسه أو الإدارة
+      allow create: if isAdmin() || (
+        request.auth != null &&
+        request.auth.uid == userId
+      );
 
-      allow update: if (isOwner(userId) &&
-        (!('role' in request.resource.data) || request.resource.data.role == resource.data.role) &&
-        (!('uid' in request.resource.data) || request.resource.data.uid == userId)
-      ) || isAdmin();
+      // تحديث الحساب:
+      // الإدارة لها صلاحية تعديل جميع الحقول بما فيها الاسم وحالة التأكيد
+      // الطالب: يُسمح له بتأكيد اسمه لمرة واحدة فقط إذا لم يكن مؤكداً
+      // وبمجرد تأكيد الاسم (nameConfirmed == true) يُمنع الطالب تماماً على مستوى الـ Backend من تغيير اسمه
+      allow update: if isAdmin() || (
+        request.auth != null &&
+        request.auth.uid == userId &&
+        (
+          // الحالة 1: الطالب لم يؤكد اسمه بعد، مسموح له بتأكيد اسمه وتعيين nameConfirmed: true
+          (!('nameConfirmed' in resource.data) || resource.data.nameConfirmed != true)
+          ||
+          // الحالة 2: الطالب أكد اسمه مسبقاً، يُمنع تماماً من تغيير حقل الاسم name أو تغيير nameConfirmed
+          (
+            resource.data.nameConfirmed == true &&
+            request.resource.data.name == resource.data.name &&
+            request.resource.data.nameConfirmed == true
+          )
+        )
+      );
 
+      // حذف الحساب متاح للإدارة فقط
       allow delete: if isAdmin();
     }
 
@@ -87,12 +104,12 @@ service cloud.firestore {
     // 6. STUDENTS (هيكل توافقي مع الطلاب و subcollections)
     // =====================================================
     match /students/{uid} {
-      allow read: if isOwner(uid) || isAdmin();
-      allow write: if isAdmin() || isOwner(uid);
+      allow read: if isAdmin() || (request.auth != null && request.auth.uid == uid);
+      allow write: if isAdmin() || (request.auth != null && request.auth.uid == uid);
 
       match /{subcollection}/{documentId} {
-        allow read: if isOwner(uid) || isAdmin();
-        allow write: if isAdmin() || isOwner(uid);
+        allow read: if isAdmin() || (request.auth != null && request.auth.uid == uid);
+        allow write: if isAdmin() || (request.auth != null && request.auth.uid == uid);
       }
     }
 

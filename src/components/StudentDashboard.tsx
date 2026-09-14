@@ -33,7 +33,7 @@ import { getStudentAllProgress } from '../lib/dataService';
 import { evaluateStudentBadges } from '../lib/badgeService';
 import { triggerCelebrationConfetti, triggerFireworksConfetti } from '../lib/confettiService';
 import { BadgesSection } from './BadgesSection';
-import { auth, db, ADMIN_UID } from '../lib/firebase';
+import { auth, db, isAdminUser } from '../lib/firebase';
 import { doc, setDoc } from 'firebase/firestore';
 import {
   CheckCircle2,
@@ -60,7 +60,7 @@ import {
 } from 'lucide-react';
 
 export const StudentDashboard: React.FC = () => {
-  const { currentUser, userProfile, updateProfileName } = useAuth();
+  const { currentUser, userProfile } = useAuth();
 
   // Active view tab
   const [activeTab, setActiveTab] = useState<'hadiths' | 'badges'>('hadiths');
@@ -87,12 +87,6 @@ export const StudentDashboard: React.FC = () => {
   // Overall progress / history for streaks and badges
   const [allHistory, setAllHistory] = useState<DailyProgress[]>([]);
 
-  // Name editing modal/state
-  const [isEditingName, setIsEditingName] = useState(false);
-  const [nameInput, setNameInput] = useState('');
-  const [savingName, setSavingName] = useState(false);
-  const [nameError, setNameError] = useState('');
-
   // Selected day object from week
   const selectedDayInfo = useMemo(() => {
     return (
@@ -111,7 +105,7 @@ export const StudentDashboard: React.FC = () => {
 
   // Ensure current student's record is reliably registered in Firestore 'users' collection
   useEffect(() => {
-    if (currentUser && currentUser.uid && currentUser.uid !== ADMIN_UID) {
+    if (currentUser && currentUser.uid && !isAdminUser(currentUser.uid)) {
       const userRef = doc(db, 'users', currentUser.uid);
       const updateData: Record<string, any> = {
         uid: currentUser.uid,
@@ -119,15 +113,11 @@ export const StudentDashboard: React.FC = () => {
         role: 'student',
         lastSeenAt: new Date().toISOString(),
       };
-      // Only set name if userProfile has a verified valid name to avoid reverting admin edits
-      if (userProfile?.name && userProfile.name !== 'طالب علم') {
-        updateData.name = userProfile.name.trim();
-      }
       setDoc(userRef, updateData, { merge: true }).catch((err) =>
         console.warn('Could not sync student profile to Firestore:', err)
       );
     }
-  }, [currentUser, userProfile?.name, userProfile?.email]);
+  }, [currentUser, userProfile?.email]);
 
   // Load hadiths and student completion whenever selectedDateStr or user UID changes
   useEffect(() => {
@@ -355,26 +345,6 @@ export const StudentDashboard: React.FC = () => {
     return evaluateStudentBadges(allHistory, todayCompletedAll, todayISO).badges;
   }, [allHistory, todayCompletedAll, todayISO]);
 
-  // Handle saving student name
-  const handleSaveName = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!nameInput.trim()) {
-      setNameError('يرجى إدخال اسم صحيح');
-      return;
-    }
-    setSavingName(true);
-    setNameError('');
-    try {
-      await updateProfileName(nameInput.trim());
-      setIsEditingName(false);
-    } catch (err: any) {
-      console.error('Failed to update student name:', err);
-      setNameError(err?.message || 'تعذر تحديث الاسم، يرجى المحاولة لاحقاً');
-    } finally {
-      setSavingName(false);
-    }
-  };
-
   // Helper to render the daily hadith tasks content for the active selected day
   const renderDailyHadithsArea = () => {
     return (
@@ -578,22 +548,11 @@ export const StudentDashboard: React.FC = () => {
             {userProfile?.name?.charAt(0) || 'ط'}
           </div>
           <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-lg sm:text-xl font-black text-slate-800">
-                مرحباً، {userProfile?.name || 'طالب العلم'}
-              </h2>
-              <button
-                type="button"
-                onClick={() => {
-                  setNameInput(userProfile?.name || '');
-                  setIsEditingName(true);
-                }}
-                className="text-slate-400 hover:text-blue-600 transition-colors p-1"
-                title="تعديل الاسم"
-              >
-                <Edit3 className="w-4 h-4" />
-              </button>
-            </div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-lg sm:text-xl font-black text-slate-800">
+                  مرحباً، {userProfile?.name || 'طالب العلم'}
+                </h2>
+              </div>
             <p className="text-xs text-slate-500 font-medium">
               داوم على تطبيق السنن النبوية اليومية لتثبيت العمل ونيل الأجر
             </p>
@@ -973,61 +932,6 @@ export const StudentDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* Edit Student Name Modal */}
-      {isEditingName && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-3xl p-6 sm:p-7 max-w-sm w-full shadow-2xl border border-slate-100 text-right">
-            <h3 className="text-lg font-black text-slate-800 mb-1">
-              تعديل اسم الطالب
-            </h3>
-            <p className="text-xs text-slate-500 mb-4">
-              اكتب اسمك الكريم ليظهر في سجلات وإحصائيات البرنامج
-            </p>
-
-            <form onSubmit={handleSaveName} className="space-y-4">
-              <input
-                type="text"
-                value={nameInput}
-                onChange={(e) => setNameInput(e.target.value)}
-                placeholder="اكتب اسمك هنا..."
-                dir="rtl"
-                autoFocus
-                className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-blue-600 text-sm font-medium"
-              />
-
-              {nameError && (
-                <div className="text-xs text-red-600 font-bold bg-red-50 p-2 rounded-lg">
-                  {nameError}
-                </div>
-              )}
-
-              <div className="flex items-center gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsEditingName(false)}
-                  className="flex-1 py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all cursor-pointer"
-                >
-                  إلغاء
-                </button>
-                <button
-                  type="submit"
-                  disabled={savingName}
-                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-all cursor-pointer shadow-sm disabled:opacity-60 disabled:cursor-not-allowed disabled:pointer-events-none"
-                >
-                  {savingName ? (
-                    <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-white" />
-                      <span>جارٍ الحفظ...</span>
-                    </>
-                  ) : (
-                    <span>حفظ الاسم</span>
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

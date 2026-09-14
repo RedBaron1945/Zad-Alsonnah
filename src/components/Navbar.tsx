@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { isAdminUser } from '../lib/firebase';
 import { LogOut, Edit3, Check, X, Shield, Loader2 } from 'lucide-react';
 import { TakweenLogo } from './TakweenLogo';
 
@@ -9,7 +10,8 @@ interface NavbarProps {
 }
 
 export const Navbar: React.FC<NavbarProps> = () => {
-  const { userProfile, updateProfileName, signOut } = useAuth();
+  const { currentUser, userProfile, updateProfileName, signOut } = useAuth();
+  const isAdmin = isAdminUser(currentUser?.uid);
   const [isEditingName, setIsEditingName] = useState(false);
   const [editNameValue, setEditNameValue] = useState('');
   const [isSavingName, setIsSavingName] = useState(false);
@@ -72,7 +74,7 @@ export const Navbar: React.FC<NavbarProps> = () => {
                     <span className="max-w-[110px] sm:max-w-[150px] truncate text-gray-900 font-bold text-xs sm:text-sm">
                       {userProfile.name || 'طالب علم'}
                     </span>
-                    {userProfile.role === 'admin' ? (
+                    {isAdmin ? (
                       <span className="text-[10px] text-emerald-700 font-bold flex items-center gap-0.5">
                         <Shield className="w-2.5 h-2.5" />
                         إدارة البرنامج
@@ -84,14 +86,16 @@ export const Navbar: React.FC<NavbarProps> = () => {
                     )}
                   </div>
 
-                  {/* Edit Name Button (Especially for students who need to replace email with real name) */}
-                  <button
-                    onClick={handleStartEditName}
-                    className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
-                    title="تعديل اسمي الشخصي"
-                  >
-                    <Edit3 className="w-3.5 h-3.5" />
-                  </button>
+                  {/* Edit Name Button (Strictly for admin; students cannot edit after confirmation) */}
+                  {isAdmin && (
+                    <button
+                      onClick={handleStartEditName}
+                      className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                      title="تعديل اسم المشرف"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
               </div>
 

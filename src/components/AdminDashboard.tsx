@@ -43,6 +43,8 @@ import {
   AlertTriangle,
   FileSpreadsheet,
   Loader2,
+  ShieldCheck,
+  AlertCircle,
 } from 'lucide-react';
 
 export const AdminDashboard: React.FC = () => {
@@ -175,14 +177,28 @@ export const AdminDashboard: React.FC = () => {
         ...prev,
         studentsList: prev.studentsList.map((item) =>
           item.user.uid === editingStudent.user.uid
-            ? { ...item, user: { ...item.user, name: cleanName } }
+            ? {
+                ...item,
+                user: {
+                  ...item.user,
+                  name: cleanName,
+                },
+              }
             : item
         ),
       }));
 
       if (selectedStudent?.user.uid === editingStudent.user.uid) {
         setSelectedStudent((prev) =>
-          prev ? { ...prev, user: { ...prev.user, name: cleanName } } : null
+          prev
+            ? {
+                ...prev,
+                user: {
+                  ...prev.user,
+                  name: cleanName,
+                },
+              }
+            : null
         );
       }
 
@@ -561,9 +577,28 @@ export const AdminDashboard: React.FC = () => {
                               {student.user.name ? student.user.name[0] : 'ط'}
                             </div>
                             <div>
-                              <span className="font-extrabold text-gray-900 block text-xs sm:text-sm">
-                                {student.user.name}
-                              </span>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="font-extrabold text-gray-900 block text-xs sm:text-sm">
+                                  {student.user.name}
+                                </span>
+                                {student.user.nameConfirmed ? (
+                                  <span
+                                    className="inline-flex items-center gap-0.5 text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-full border border-emerald-200"
+                                    title="تم تأكيد واعتماد الاسم رسمياً من الطالب"
+                                  >
+                                    <ShieldCheck className="w-2.5 h-2.5 text-emerald-600" />
+                                    <span>مؤكد</span>
+                                  </span>
+                                ) : (
+                                  <span
+                                    className="inline-flex items-center gap-0.5 text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded-full border border-amber-200"
+                                    title="لم يؤكد الطالب اسمه بعد (ستظهر له نافذة التأكيد الإلزامية عند الدخول)"
+                                  >
+                                    <AlertCircle className="w-2.5 h-2.5 text-amber-600" />
+                                    <span>بانتظار التأكيد</span>
+                                  </span>
+                                )}
+                              </div>
                             </div>
                           </div>
                         </td>
